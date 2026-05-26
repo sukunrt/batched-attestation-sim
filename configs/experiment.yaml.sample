@@ -1,0 +1,63 @@
+# Experiment config for: uv run simctl experiment --config <this-file>
+#
+# An experiment shares one topology across multiple simulations,
+# each varying GossipSub parameters or other settings.
+# The topology is generated once and the Go binary is built once.
+#
+# Copy this file, adjust parameters, and run.
+
+# Shared topology — applies to all simulations
+topology:
+  num_nodes: 512
+  degree: 70
+  type: random                # "random" or "ring"
+  seed: 42
+  super_node_fraction: 0.2    # fraction of nodes with 1024 Mbps bandwidth
+
+  # Fanout topology (optional)
+  fanout_nodes_per_topic: 0
+  fanout_node_mesh_peers: 1
+
+  # Latency tuning
+  latency_multiple: 1.0
+  min_node_to_node_latency_ms: 0
+
+# Each entry is a separate simulation run.
+# All fields from the simulation section of simulation.yaml.sample are available here,
+# except topology (which is shared above).
+simulations:
+  # Run 1: D=8
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 1
+    num_slots: 5
+    slot_duration_seconds: 10
+    num_attestors: 512
+    num_messages_per_attestor: 1
+    attestation_validation_delay_ms: 30
+    attestation_validation_std_dev_ms: 5
+    publish_delay_mean_ms: 0
+    stop_time_minutes: 30.0
+    log_level: info
+    bandwidth_log_frequency_ms: 100
+    disable_ihave_gossip: false
+
+  # Run 2: D=16
+  - gossipsub_params:
+      D: 16
+      Dlow: 14
+      Dhigh: 18
+    num_topics: 1
+    num_slots: 5
+    slot_duration_seconds: 10
+    num_attestors: 512
+    num_messages_per_attestor: 1
+    attestation_validation_delay_ms: 30
+    attestation_validation_std_dev_ms: 5
+    publish_delay_mean_ms: 0
+    stop_time_minutes: 30.0
+    log_level: info
+    bandwidth_log_frequency_ms: 100
+    disable_ihave_gossip: false

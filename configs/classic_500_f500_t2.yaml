@@ -1,0 +1,32 @@
+# Same topology as partial_500_f500_t2.yaml, classic gossipsub.
+simulation:
+  topology:
+    num_nodes: 500
+    degree: 30
+    type: random
+    seed: 42
+    super_node_fraction: 0.2
+    fanout_nodes_per_topic: 500
+    fanout_node_mesh_peers: 2
+
+  gossipsub_params:
+    D: 8
+    Dlow: 6
+    Dhigh: 12
+
+  num_topics: 2
+  num_slots: 3
+  slot_duration_seconds: 10
+  num_attestors: 500
+  attestation_data_size: 128
+  signature_size: 96
+  attestation_validation_delay_ms: 10
+  attestation_validation_std_dev_ms: 3
+  validation_batch_window_ms: 10
+  per_attestation_validation_us: 100
+  stop_time_minutes: 10.0
+  log_level: info
+  bandwidth_log_frequency_ms: 500
+
+  use_partial_messages: false
+  disable_ihave_gossip: false

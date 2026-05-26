@@ -1,0 +1,163 @@
+# Scenario 1 sweep: 512 mesh nodes, 500 fanout nodes per topic, 2 topics.
+# Compares classic gossipsub vs partial id list across D=8/D=4 and IHAVE on/off.
+topology:
+  num_nodes: 512
+  degree: 30
+  type: random
+  seed: 42
+  super_node_fraction: 0.2
+  fanout_nodes_per_topic: 500
+  fanout_node_mesh_peers: 2
+
+simulations:
+  # 1. Classic gossipsub, D=8
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    disable_ihave_gossip: false
+
+  # 2. Classic gossipsub, D=8, IHAVE disabled
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    disable_ihave_gossip: true
+
+  # 3. Partial id list, D=8
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    use_partial_messages: true
+    publish_interval_ms: 20
+    attestation_data_size: 128
+    signature_size: 96
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    disable_ihave_gossip: false
+
+  # 4. Partial id list, D=8, IHAVE disabled
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    use_partial_messages: true
+    publish_interval_ms: 20
+    attestation_data_size: 128
+    signature_size: 96
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    disable_ihave_gossip: true
+
+  # 5. Classic gossipsub, D=4
+  - gossipsub_params:
+      D: 4
+      Dlow: 4
+      Dhigh: 5
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    disable_ihave_gossip: false
+
+  # 6. Classic gossipsub, D=4, IHAVE disabled
+  - gossipsub_params:
+      D: 4
+      Dlow: 4
+      Dhigh: 5
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    disable_ihave_gossip: true
+
+  # 7. Partial id list, D=4
+  - gossipsub_params:
+      D: 4
+      Dlow: 4
+      Dhigh: 5
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    use_partial_messages: true
+    publish_interval_ms: 20
+    attestation_data_size: 128
+    signature_size: 96
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    disable_ihave_gossip: false
+
+  # 8. Partial id list, D=4, IHAVE disabled
+  - gossipsub_params:
+      D: 4
+      Dlow: 4
+      Dhigh: 5
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    stop_time_minutes: 10.0
+    log_level: info
+    use_partial_messages: true
+    publish_interval_ms: 20
+    attestation_data_size: 128
+    signature_size: 96
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    disable_ihave_gossip: true

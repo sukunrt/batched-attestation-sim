@@ -1,0 +1,58 @@
+# Single simulation config for: uv run simctl attestations --config <this-file>
+#
+# Copy this file, adjust parameters, and run.
+
+simulation:
+  topology:
+    num_nodes: 512              # total mesh nodes in the network
+    degree: 70                  # connections per node (graph degree)
+    type: random                # "random" or "ring"
+    seed: 42                    # random seed for reproducibility
+    super_node_fraction: 0.2    # fraction of nodes with 1024 Mbps bandwidth (rest get 50 Mbps)
+
+    # Fanout topology (optional) — dedicated publisher nodes outside the mesh
+    fanout_nodes_per_topic: 0   # number of fanout nodes per topic (0 = none)
+    fanout_node_mesh_peers: 1   # mesh peers each fanout node connects to
+
+    # Latency tuning
+    latency_multiple: 1.0       # scale all inter-node latencies by this factor
+    min_node_to_node_latency_ms: 0  # floor for any node-to-node latency
+
+  gossipsub_params:
+    D: 8                        # target mesh degree
+    Dlow: 6                     # minimum mesh degree (typically D-2)
+    Dhigh: 12                   # maximum mesh degree (typically D+2, D must be >= 4)
+
+  # Simulation parameters
+  num_topics: 1                 # number of attestation committees/subnets
+  num_slots: 5                  # number of slots to simulate
+  slot_duration_seconds: 10     # seconds per slot
+  num_attestors: 512            # publishers per slot
+  num_messages_per_attestor: 1  # messages each attestor publishes per slot
+  attestation_data_size: 128    # bytes of shared attestation data
+  signature_size: 96            # bytes per BLS signature
+
+  # Validation delay — models BLS signature verification
+  # Total delay = floor + lognormal(mean=floor*0.2, std=std_dev)
+  attestation_validation_delay_ms: 30   # floor delay (irreducible CPU cost)
+  attestation_validation_std_dev_ms: 5  # jitter std dev (0 = fixed delay, no randomness)
+
+  # Publish delay — exponential distribution with this mean (0 = instant)
+  publish_delay_mean_ms: 0
+
+  # Runtime
+  stop_time_minutes: 30.0       # Shadow simulation timeout
+  log_level: info               # debug, info, warn, error
+  bandwidth_log_frequency_ms: 100
+  disable_ihave_gossip: false   # disable IHAVE gossip messages
+
+  # --- Partial messages (optional) ---
+  # Enable to use batched attestation broadcast instead of classic gossipsub.
+  # Attestations are grouped by data variant, sent incrementally with a forwarding budget.
+  publish_interval_ms: 20              # tick interval for batched sends (spec recommends 20ms)
+  max_peers_per_attestation: 0         # forwarding budget per attestation (0 = D*2)
+  divergent_attestor_fraction: 0.01    # fraction of attestors with different chain head
+  validation_batch_window_ms: 5        # collect attestations for this long before batch-validating
+  per_attestation_validation_us: 100   # per-attestation BLS verify cost in microseconds
+  committee_size: 2048                 # bitmap length for attestor_indices/available/requests
+                                       # (must be >= num_nodes + num fanout nodes; default 2048)

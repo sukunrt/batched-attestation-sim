@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package attestation;
+
+option go_package = "github.com/ethp2p/simlab/cmd/attestation/pb";
+
+// Attestation is the classic-mode message: one attestation per Publish.
+message Attestation {
+  int32 node_num = 1;
+  int32 slot_num = 2;
+  int64 publish_at_unix_ms = 3;
+  bytes data = 4;
+  int64 expected_publish_at_unix_ms = 5;
+  int32 msg_index = 6;
+  bytes signature = 7;
+}
+
+// BatchedAttestation carries attestations from multiple committee members
+// that share the same attestation data. `attestor_indices` is a list of
+// committee positions (0..committee_size-1) whose attestor contributed a
+// signature. Positions fit in uint16 for committee_size<=65535; we use
+// repeated uint32 so proto3 varint keeps the wire size close to a packed
+// uint16 array (1 byte for positions 0..127, 2 bytes for 128..16383).
+// Signatures are listed in the same order as `attestor_indices` (typically
+// ascending, but order is determined by the encoder).
+message BatchedAttestation {
+  bytes attestation_data       = 1; // opaque AttestationData (sized to attestation_data_size)
+  repeated uint32 attestor_indices = 2; // committee positions; values < committee_size
+  repeated bytes signatures    = 3; // one per element of attestor_indices
+}
+
+// CommitteeAttestationPartsMetadata is the per-AttestationData gossip control
+// envelope. `available` advertises the positions the sender holds; `requests`
+// is a non-persistent IWANT — the receiver satisfies what it can on its next
+// publish tick and forgets the rest. Both fields are fixed-width bitmaps of
+// length `committee_size`.
+message CommitteeAttestationPartsMetadata {
+  int32 slot              = 1; // redundant with attestation_data per spec
+  bytes attestation_data  = 2;
+  bytes available         = 3; // bitmap[committee_size]
+  bytes requests          = 4; // bitmap[committee_size]
+}
+
+// ControlEnvelope is the PartsMetadata blob: one envelope per (peer, tick)
+// carrying one CommitteeAttestationPartsMetadata per unique AttestationData
+// the sender has state for.
+message ControlEnvelope {
+  repeated CommitteeAttestationPartsMetadata metadatas = 1;
+}
+
+// BatchedAttestationEnvelope is the PartialMessage blob: one envelope per
+// (peer, tick) carrying one BatchedAttestation per unique AttestationData
+// being forwarded.
+message BatchedAttestationEnvelope {
+  repeated BatchedAttestation batches = 1;
+}
