@@ -37,6 +37,8 @@ type e2eOpts struct {
 	rpcTracer                 pubsub.RPCTracer     // optional, observe wire-level RPCs
 	verifyDelay               func() time.Duration // default 5ms
 	divergentAttestorFraction float64              // default 0 (no forks)
+	committeeSize             int                  // default 128
+	memberships               []TopicMembership    // default: one per topic at position == num
 }
 
 func defaultE2EOpts(num, publishSlot int, publishStart time.Time, slotDuration time.Duration, numAttestors int) e2eOpts {
@@ -45,7 +47,6 @@ func defaultE2EOpts(num, publishSlot int, publishStart time.Time, slotDuration t
 		publishSlot:       publishSlot,
 		numTopics:         1,
 		fanout:            false,
-		fanoutTopicIndex:  -1,
 		gossipsubParams:   testGossipsubParams,
 		maxPerAttestation: 16,
 		publishInterval:   20 * time.Millisecond,
@@ -54,24 +55,36 @@ func defaultE2EOpts(num, publishSlot int, publishStart time.Time, slotDuration t
 		publishStart:      publishStart,
 		slotDuration:      slotDuration,
 		verifyDelay:       func() time.Duration { return 5 * time.Millisecond },
+		committeeSize:     128,
 	}
 }
 
 // newE2EPartialNode builds a Node configured for partial-message propagation.
+//
+// If opts.memberships is nil, defaults to one membership per topic at
+// position == opts.num (so node_num doubles as position). Tests using fanout
+// must set opts.fanoutTopicIndex; the single membership is placed on that
+// topic at position == opts.num.
 func newE2EPartialNode(opts e2eOpts, nw *testNetwork, tr *testTracer) *Node {
 	publishSlots := map[int]struct{}{}
 	if opts.publishSlot > 0 {
 		publishSlots[opts.publishSlot] = struct{}{}
 	}
-	fanoutIdx := opts.fanoutTopicIndex
-	if !opts.fanout {
-		fanoutIdx = -1
+	memberships := opts.memberships
+	if memberships == nil {
+		if opts.fanout {
+			memberships = []TopicMembership{{TopicIndex: opts.fanoutTopicIndex, Position: opts.num}}
+		} else {
+			for i := 0; i < opts.numTopics; i++ {
+				memberships = append(memberships, TopicMembership{TopicIndex: i, Position: opts.num})
+			}
+		}
 	}
 	n := &Node{
 		Num:                       opts.num,
 		PublishSlots:              publishSlots,
 		NumTopics:                 opts.numTopics,
-		FanoutTopicIndex:          fanoutIdx,
+		CommitteeMemberships:      memberships,
 		Fanout:                    opts.fanout,
 		GossipsubParams:           opts.gossipsubParams,
 		VerificationDelay:         opts.verifyDelay,
@@ -87,7 +100,7 @@ func newE2EPartialNode(opts e2eOpts, nw *testNetwork, tr *testTracer) *Node {
 		VerificationBatchWindow:   2 * time.Millisecond,
 		IHaveGossipDegree:         opts.iHaveDegree,
 		DisableIHaveGossip:        opts.disableIHave,
-		CommitteeSize:             128,
+		CommitteeSize:             opts.committeeSize,
 		PublishStart:              opts.publishStart,
 		SlotDuration:              opts.slotDuration,
 	}

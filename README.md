@@ -113,15 +113,22 @@ In partial-message mode, the simulator installs libp2p's partial-messages extens
 with partial-message requests, and batches attestations by shared attestation data. The wire
 format follows the `draft-committee-attestation` spec:
 
-- `BatchedAttestation { attestation_data, attestor_indices (bitmap[committee_size]), signatures[] }`
+- `BatchedAttestation { attestation_data, attestor_indices (bitmap[num_attestors]), signatures[] }`
 - `CommitteeAttestationPartsMetadata { slot, attestation_data, available, requests }`
 - Each PublishAction carries a `ControlEnvelope` (per-bucket metadata list) and a
   `BatchedAttestationEnvelope` (per-bucket batch list).
 
+Each topic has a fixed committee of `num_attestors` members chosen once at sim build:
+`fanout_nodes_per_topic` fanout nodes assigned to that topic (positions `[0, fnpt)`) plus
+`num_attestors - fnpt` mesh nodes drawn from the global mesh pool (positions
+`[fnpt, num_attestors)`). Committee membership is written to `schedule.json` as
+`committee_membership: {topic_id: [node_nums…]}` and passed to each Go process via the
+`-committee-memberships=t0:p0;t1:p1` CLI flag. Position is the index into the per-topic
+committee list; node identity is decoupled from committee position.
+
 `attestor_indices`, `available`, and `requests` are fixed-width bitmaps of length
-`committee_size` bits (default 2048, override with `committee_size:` in YAML). Bit `i` set means
-the committee member at position `i` is involved. Committee position is statically assigned to
-the node number; the simulator asserts `node_num < committee_size` at startup.
+`num_attestors` bits (`ceil(num_attestors / 8)` bytes). Bit `i` set means the committee member
+at position `i` is involved.
 
 State is keyed per `(topic, slot, attestation_data)` bucket — forks coexist as independent
 buckets so two divergent attestation data variants at the same slot do not get deduplicated by
@@ -153,6 +160,14 @@ prefix of `attestation_data` — to correlate across the pipeline):
 - `partial_fanout_publish` — fanout publisher's eager batch send.
 - `partial_recv_tick`, `partial_recv_metadata`, `partial_recv_batch` — incoming per-(peer, tick)
   and per-bucket detail.
+
+Wire-level tracer lines (`topic_message_*`, `partial_*`) are attestation-aware (`att_count`,
+`att_data_bytes`, `sig_bytes`, …) for bandwidth analysis.
+
+## Analysis
+
+`analysis/prelim-analysis.py <dir>` prints a classic-vs-partial comparison (time-to-receive-95%
+latency and a received-bytes composition table) for a run or experiment directory.
 
 ## Run Outputs
 

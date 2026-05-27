@@ -157,8 +157,7 @@ func newPartialAttestationManager(
 ) *partialAttesattionManager {
 	logger := slog.With("node", n.Num, "component", "partial")
 	if n.CommitteeSize <= 0 {
-		// Defensive — main.go should populate this, but keep tests cheap.
-		n.CommitteeSize = 2048
+		panic("CommitteeSize must be set (= num_attestors per topic)")
 	}
 	m := &partialAttesattionManager{
 		logger:           logger,

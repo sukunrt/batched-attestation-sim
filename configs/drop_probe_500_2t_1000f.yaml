@@ -1,0 +1,65 @@
+# Drop-probe: same load as experiment_classic_vs_partial_500_2t_1000f.yaml
+# (500 mesh, 1000 fanout/topic, 2 topics, num_attestors=1000) so the per-peer
+# outbound queue can overflow under the 1000-sender burst, but trimmed to 2
+# slots for a faster turnaround. The drop burst recurs every slot, so 2 slots
+# is enough to observe it. Used with the DropTracer (drop_summary log lines).
+topology:
+  num_nodes: 500
+  degree: 70
+  type: random
+  seed: 42
+  super_node_fraction: 0.2
+
+  fanout_nodes_per_topic: 1000
+  fanout_node_mesh_peers: 1
+
+  latency_multiple: 1.0
+  min_node_to_node_latency_ms: 0
+
+simulations:
+  # Classic gossipsub
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 2
+    slot_duration_seconds: 10
+    num_attestors: 1000
+    num_messages_per_attestor: 1
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 30
+    attestation_validation_std_dev_ms: 5
+    publish_delay_mean_ms: 0
+    stop_time_minutes: 7.0
+    log_level: info
+    bandwidth_log_frequency_ms: 100
+    disable_ihave_gossip: false
+    use_partial_messages: false
+
+  # Partial messages
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 2
+    slot_duration_seconds: 10
+    num_attestors: 1000
+    num_messages_per_attestor: 1
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 30
+    attestation_validation_std_dev_ms: 5
+    publish_delay_mean_ms: 0
+    stop_time_minutes: 7.0
+    log_level: info
+    bandwidth_log_frequency_ms: 100
+    disable_ihave_gossip: false
+    use_partial_messages: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    validation_batch_window_ms: 5
+    per_attestation_validation_us: 100

@@ -34,28 +34,12 @@ type SimConfig struct {
 	PublishIntervalMs         int     `yaml:"publish_interval_ms"`
 	MaxPeersPerAttestation    int     `yaml:"max_peers_per_attestation"`
 	DivergentAttestorFraction float64 `yaml:"divergent_attestor_fraction"`
-	AttestorLists             [][]int `yaml:"attestor_lists"`
 
 	// Partial-messages path (lists of attestor IDs + ephemeral iwant).
 	UsePartialMessages bool `yaml:"use_partial_messages"`
 	// IHaveGossipDegree caps how many gossip peers receive an IHAVE on each
 	// publish tick. 0 (unset) defaults to 6 (matches gossipsub Dlazy).
 	IHaveGossipDegree int `yaml:"ihave_gossip_degree"`
-	// CommitteeSize is the wire-level capacity of every attestor-index
-	// bitmap (BatchedAttestation.attestor_indices, and the available/requests
-	// fields of CommitteeAttestationPartsMetadata). It also defines the
-	// maximum committee position a node can occupy. Defaults to 2048 to match
-	// the Eth spec value of MAX_VALIDATORS_PER_COMMITTEE.
-	CommitteeSize int `yaml:"committee_size"`
-}
-
-// EffectiveCommitteeSize returns the wire-level committee size, defaulting to
-// 2048 (Eth MAX_VALIDATORS_PER_COMMITTEE) when unset.
-func (s *SimConfig) EffectiveCommitteeSize() int {
-	if s.CommitteeSize <= 0 {
-		return 2048
-	}
-	return s.CommitteeSize
 }
 
 func (s *SimConfig) PublishInterval() time.Duration {

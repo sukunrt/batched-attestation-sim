@@ -121,9 +121,6 @@ class AttestationSimConfig(BaseModel):
     use_partial_messages: bool = False
     # 0 = default 6 (matches gossipsub Dlazy)
     ihave_gossip_degree: int = 0
-    # Bitmap length for attestor_indices/available/requests in partial mode.
-    # Must be >= total node count (mesh + fanout). 0 = Go default of 2048.
-    committee_size: int = 0
 
 
 class AttestationConfig(BaseModel):
@@ -171,9 +168,6 @@ class AttestationSimParams(BaseModel):
     use_partial_messages: bool = False
     # 0 = default 6 (matches gossipsub Dlazy)
     ihave_gossip_degree: int = 0
-    # Bitmap length for attestor_indices/available/requests in partial mode.
-    # Must be >= total node count (mesh + fanout). 0 = Go default of 2048.
-    committee_size: int = 0
 
 
 class AttestationExperimentConfig(BaseModel):

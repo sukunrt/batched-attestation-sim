@@ -32,14 +32,14 @@ func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
 	var (
-		configFile         = flag.String("config-file", "", "Path to YAML config file")
-		nodeNum            = flag.Int("node-num", 0, "Node number")
-		publishSlotsStr    = flag.String("publish-slots", "", "Comma-separated slot numbers to publish in")
-		peerNumsStr        = flag.String("peer-nums", "", "Comma-separated peer node numbers")
-		publishMode        = flag.String("publish-mode", "mesh", "Publish mode: mesh or fanout")
-		disableIHaveGossip = flag.Bool("disable-ihave-gossip", false, "Disable IHAVE gossip")
-		fanoutTopicIndex   = flag.Int("fanout-topic-index", -1, "Topic index for fanout node (-1 = mesh, joins all)")
-		usePartialMessages = flag.Bool("use-partial-messages", false, "Use partial messages (list of attestor IDs + ephemeral iwant)")
+		configFile           = flag.String("config-file", "", "Path to YAML config file")
+		nodeNum              = flag.Int("node-num", 0, "Node number")
+		publishSlotsStr      = flag.String("publish-slots", "", "Comma-separated slot numbers to publish in")
+		peerNumsStr          = flag.String("peer-nums", "", "Comma-separated peer node numbers")
+		publishMode          = flag.String("publish-mode", "mesh", "Publish mode: mesh or fanout")
+		disableIHaveGossip   = flag.Bool("disable-ihave-gossip", false, "Disable IHAVE gossip")
+		committeeMemberships = flag.String("committee-memberships", "", "Semicolon-separated topic:position pairs, e.g. 0:7;1:42")
+		usePartialMessages   = flag.Bool("use-partial-messages", false, "Use partial messages (list of attestor IDs + ephemeral iwant)")
 	)
 	flag.Parse()
 
@@ -64,11 +64,21 @@ func main() {
 	}
 
 	usePartial := *usePartialMessages || sim.UsePartialMessages
+	memberships := parseCommitteeMemberships(*committeeMemberships)
+	for _, m := range memberships {
+		if m.TopicIndex < 0 || m.TopicIndex >= numTopics {
+			log.Fatalf("committee membership topic %d out of range [0, %d)", m.TopicIndex, numTopics)
+		}
+		if m.Position < 0 || m.Position >= sim.NumAttestors {
+			log.Fatalf("committee membership position %d out of range [0, num_attestors=%d)", m.Position, sim.NumAttestors)
+		}
+	}
+
 	n := &node.Node{
 		Num:                        *nodeNum,
 		PublishSlots:               publishSlots,
 		NumTopics:                  numTopics,
-		FanoutTopicIndex:           *fanoutTopicIndex,
+		CommitteeMemberships:       memberships,
 		Fanout:                     *publishMode == "fanout",
 		DisableIHaveGossip:         *disableIHaveGossip,
 		GossipsubParams:            sim.GossipsubParams,
@@ -89,13 +99,9 @@ func main() {
 		VerificationBatchWindow:    sim.ValidationBatchWindow(),
 		PerAttestationVerification: sim.PerAttestationValidation(),
 		IHaveGossipDegree:          sim.EffectiveIHaveGossipDegree(),
-		CommitteeSize:              sim.EffectiveCommitteeSize(),
+		CommitteeSize:              sim.NumAttestors,
 		PublishStart:               publishStart,
 		SlotDuration:               sim.SlotDuration(),
-	}
-
-	if usePartial && *nodeNum >= n.CommitteeSize {
-		log.Fatalf("node number %d >= committee_size %d; partial mode requires node < committee_size", *nodeNum, n.CommitteeSize)
 	}
 
 	// add some jitter so that all nodes aren't doing heartbeat in sync
@@ -118,6 +124,35 @@ func main() {
 	n.Run(sim.NumSlots, sim.SlotDuration())
 
 	time.Sleep(30 * time.Second)
+}
+
+// parseCommitteeMemberships parses a "t0:p0;t1:p1;..." string into
+// TopicMembership entries. Empty input returns nil.
+func parseCommitteeMemberships(s string) []node.TopicMembership {
+	if s == "" {
+		return nil
+	}
+	var out []node.TopicMembership
+	for entry := range strings.SplitSeq(s, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		topicStr, posStr, ok := strings.Cut(entry, ":")
+		if !ok {
+			log.Fatalf("invalid committee membership entry %q (want topic:position)", entry)
+		}
+		topic, err := strconv.Atoi(strings.TrimSpace(topicStr))
+		if err != nil {
+			log.Fatalf("invalid topic index %q: %v", topicStr, err)
+		}
+		pos, err := strconv.Atoi(strings.TrimSpace(posStr))
+		if err != nil {
+			log.Fatalf("invalid position %q: %v", posStr, err)
+		}
+		out = append(out, node.TopicMembership{TopicIndex: topic, Position: pos})
+	}
+	return out
 }
 
 func parseIntList(s string) []int {

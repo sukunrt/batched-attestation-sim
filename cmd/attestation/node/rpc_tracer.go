@@ -11,6 +11,9 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/peer"
+	gproto "google.golang.org/protobuf/proto"
+
+	attpb "github.com/ethp2p/simlab/cmd/attestation/pb"
 )
 
 var _ pubsub.RPCTracer = (*RPCTracer)(nil)
@@ -72,6 +75,62 @@ func (t *RPCTracer) getMessageID(msgID string) int {
 		)
 	}
 	return c
+}
+
+// classicAttStats decodes a classic-mode Attestation payload (the Data field of
+// a gossipsub message) and returns the attestation_data and signature byte
+// counts plus the att_digest. Best-effort: on decode failure it returns zero
+// values and an empty digest so the caller still emits a stable log line.
+func classicAttStats(data []byte) (attDataBytes, sigBytes int, digest string) {
+	var att attpb.Attestation
+	if err := gproto.Unmarshal(data, &att); err != nil {
+		return 0, 0, ""
+	}
+	return len(att.GetData()), len(att.GetSignature()), attDigestHex(att.GetData())
+}
+
+// partialDataStats decodes a BatchedAttestationEnvelope (the partial-message
+// data blob) and returns the number of batches, the attestations conveyed (one
+// per signature), and the attestation_data and signature byte counts. The
+// attestation_data byte count is summed once per batch, so it reflects the
+// deduplicated cost partial mode pays versus classic. Best-effort on failure.
+func partialDataStats(blob []byte) (batches, attCount, attDataBytes, sigBytes int) {
+	if len(blob) == 0 {
+		return 0, 0, 0, 0
+	}
+	var env attpb.BatchedAttestationEnvelope
+	if err := gproto.Unmarshal(blob, &env); err != nil {
+		return 0, 0, 0, 0
+	}
+	batches = len(env.GetBatches())
+	for _, b := range env.GetBatches() {
+		attDataBytes += len(b.GetAttestationData())
+		sigs := b.GetSignatures()
+		attCount += len(sigs)
+		for _, s := range sigs {
+			sigBytes += len(s)
+		}
+	}
+	return batches, attCount, attDataBytes, sigBytes
+}
+
+// partialMetaStats decodes a ControlEnvelope (the partial-message metadata blob)
+// and returns the number of per-bucket metadata entries plus the total
+// available/requests bits advertised across them. Best-effort on failure.
+func partialMetaStats(blob []byte) (mdCount, availOnes, reqOnes int) {
+	if len(blob) == 0 {
+		return 0, 0, 0
+	}
+	var ctrl attpb.ControlEnvelope
+	if err := gproto.Unmarshal(blob, &ctrl); err != nil {
+		return 0, 0, 0
+	}
+	mdCount = len(ctrl.GetMetadatas())
+	for _, md := range ctrl.GetMetadatas() {
+		availOnes += availableOnes(md.GetAvailable())
+		reqOnes += requestsOnes(md.GetRequests())
+	}
+	return mdCount, availOnes, reqOnes
 }
 
 func (t *RPCTracer) OnRPCSent(
@@ -147,9 +206,14 @@ func (t *RPCTracer) OnRPCSent(
 		msgID := t.MessageIDFunc(msg)
 		messageSeq := t.getMessageID(msgID)
 		sz := proto.Size(msg)
+		attDataBytes, sigBytes, digest := classicAttStats(msg.GetData())
 		t.logger.Info("topic_message_sent",
 			"message_seq", messageSeq,
 			"bytes", sz,
+			"att_count", 1,
+			"att_data_bytes", attDataBytes,
+			"sig_bytes", sigBytes,
+			"att_digest", digest,
 			"peerID", peerID.ShortString(),
 			"topic", msg.GetTopic(),
 			"took", duration.Milliseconds(),
@@ -157,11 +221,20 @@ func (t *RPCTracer) OnRPCSent(
 	}
 
 	if partial := rpc.GetPartial(); partial != nil {
+		dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
+		metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
 		t.logger.Info("partial_sent",
 			"peerID", peerID.ShortString(),
 			"topic", partial.GetTopicID(),
 			"partial_bytes", len(partial.GetPartialMessage()),
 			"metadata_bytes", len(partial.GetPartsMetadata()),
+			"data_batches", dataBatches,
+			"att_count", attCount,
+			"att_data_bytes", attDataBytes,
+			"sig_bytes", sigBytes,
+			"meta_count", metaCount,
+			"available_ones", availOnes,
+			"requests_ones", reqOnes,
 			"took", duration.Milliseconds(),
 		)
 	}
@@ -240,9 +313,14 @@ func (t *RPCTracer) OnRPCReceived(
 		msgID := t.MessageIDFunc(msg)
 		messageSeq := t.getMessageID(msgID)
 		sz := proto.Size(msg)
+		attDataBytes, sigBytes, digest := classicAttStats(msg.GetData())
 		t.logger.Info("topic_message_received",
 			"message_seq", messageSeq,
 			"bytes", sz,
+			"att_count", 1,
+			"att_data_bytes", attDataBytes,
+			"sig_bytes", sigBytes,
+			"att_digest", digest,
 			"peerID", peerID.ShortString(),
 			"topic", msg.GetTopic(),
 			"took", duration.Milliseconds(),
@@ -250,11 +328,20 @@ func (t *RPCTracer) OnRPCReceived(
 	}
 
 	if partial := rpc.GetPartial(); partial != nil {
+		dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
+		metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
 		t.logger.Info("partial_received",
 			"peerID", peerID.ShortString(),
 			"topic", partial.GetTopicID(),
 			"partial_bytes", len(partial.GetPartialMessage()),
 			"metadata_bytes", len(partial.GetPartsMetadata()),
+			"data_batches", dataBatches,
+			"att_count", attCount,
+			"att_data_bytes", attDataBytes,
+			"sig_bytes", sigBytes,
+			"meta_count", metaCount,
+			"available_ones", availOnes,
+			"requests_ones", reqOnes,
 			"took", duration.Milliseconds(),
 		)
 	}

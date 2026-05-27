@@ -33,6 +33,14 @@ type GossipsubParams struct {
 	Dhigh int `yaml:"Dhigh"`
 }
 
+// TopicMembership is one entry in a node's committee membership: the topic
+// index plus this node's committee position within that topic. Position is
+// in [0, num_attestors).
+type TopicMembership struct {
+	TopicIndex int
+	Position   int
+}
+
 // Node is a single simulated attestor node. All fields are populated by the
 // caller before Start; the Node itself does not load configuration.
 type Node struct {
@@ -57,8 +65,12 @@ type Node struct {
 	Tracer    Tracer
 	RPCTracer pubsub.RPCTracer
 
-	Fanout           bool
-	FanoutTopicIndex int // -1 for mesh nodes (join all topics)
+	Fanout bool
+
+	// CommitteeMemberships lists the (topic, position) pairs this node is a
+	// committee member of. Fanout nodes have exactly one entry (their assigned
+	// topic). Mesh nodes have zero or more entries. Empty = pure relay node.
+	CommitteeMemberships []TopicMembership
 
 	// Partial messages fields
 	UsePartialMessages        bool
@@ -66,9 +78,8 @@ type Node struct {
 	DivergentAttestorFraction float64
 	PublishInterval           time.Duration
 	IHaveGossipDegree         int
-	// CommitteeSize is the wire-level capacity for attestor bitmaps and the
-	// upper bound on a node's committee position. Set by the caller from
-	// SimConfig.EffectiveCommitteeSize.
+	// CommitteeSize is the wire-level capacity for attestor bitmaps. All
+	// committees share the same size (= num_attestors per topic).
 	CommitteeSize int
 
 	// PublishStart is the wall-clock time at which slot 1 starts publishing.
@@ -103,9 +114,22 @@ func (n *Node) Start(ctx context.Context) {
 	opts := []pubsub.Option{
 		pubsub.WithGossipSubParams(params),
 		pubsub.WithMessageIdFn(MessageIDFunc),
+		pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign),
+		pubsub.WithNoAuthor(),
+		// DIAGNOSTIC: default is 32; bumped to test whether the size-32 per-peer
+		// outbound queue overflow is what drops ~45% of classic forwards.
+		pubsub.WithPeerOutboundQueueSize(1000),
+		// Match Prysm's front validation queue (QueueSize default 600 in
+		// beacon-chain/p2p; libp2p default is only 32). Feeds the NumCPU
+		// validation workers; rarely binds but keeps us apples-to-apples.
+		pubsub.WithValidateQueueSize(600),
 	}
 	if n.RPCTracer != nil {
 		opts = append(opts, pubsub.WithRPCTracer(n.RPCTracer))
+	}
+	dropTracer := newDropTracer(fmt.Sprintf("node%d", n.Num))
+	if dropTracer != nil {
+		opts = append(opts, pubsub.WithRawTracer(dropTracer))
 	}
 
 	n.verifier = newBatchVerifier(
@@ -130,6 +154,10 @@ func (n *Node) Start(ctx context.Context) {
 		log.Fatalf("create gossipsub: %v", err)
 	}
 	n.ps = ps
+
+	if dropTracer != nil {
+		dropTracer.start(ctx)
+	}
 
 	n.logger = slog.New(
 		slog.NewTextHandler(
@@ -182,7 +210,7 @@ func (n *Node) JoinTopics() {
 	}
 
 	if n.Fanout {
-		joinOne(topicName(n.FanoutTopicIndex), false)
+		joinOne(topicName(n.CommitteeMemberships[0].TopicIndex), false)
 	} else {
 		for i := range n.NumTopics {
 			joinOne(topicName(i), true)
@@ -390,10 +418,8 @@ func (n *Node) runPartial(numSlots int, slotDuration time.Duration) {
 }
 
 // selfPublish creates this node's own attestation and adds it to local
-// partial state.
-//
-// Committee position assignment is static: position == n.Num. main.go asserts
-// n.Num < CommitteeSize at startup.
+// partial state. Iterates the node's committee memberships; each entry
+// supplies the topic and the node's committee position within that topic.
 func (n *Node) selfPublish(slot int) {
 	sig := make([]byte, n.SignatureSize)
 	crand.Read(sig)
@@ -406,29 +432,24 @@ func (n *Node) selfPublish(slot int) {
 		}
 	}
 
-	position := n.Num
-	for _, topic := range n.topics {
-		topicName := topic.String()
+	for _, m := range n.CommitteeMemberships {
+		topicName := topicName(m.TopicIndex)
 		data := n.attestationDataForSlot(slot, topicName)
 		digest := attDigest(data)
-		topicIdx := 0
-		if n.partial != nil {
-			topicIdx = n.partial.topicIndexMap[topicName]
-		}
 		if n.Fanout {
-			n.partial.fanoutPublish(n.ps, topicName, slot, position, sig, data)
+			n.partial.fanoutPublish(n.ps, topicName, slot, m.Position, sig, data)
 		} else {
-			n.partial.publishLocal(topicName, slot, position, sig, data)
+			n.partial.publishLocal(topicName, slot, m.Position, sig, data)
 		}
 		n.logger.Info("self_published",
 			"slot", slot,
-			"topic", topicIdx,
-			"position", position,
+			"topic", m.TopicIndex,
+			"position", m.Position,
 			"att_digest", hex.EncodeToString(digest[:]),
 			"at", publishTime.UnixMilli(),
 		)
 		if n.Tracer != nil {
-			n.Tracer.OnPartialPublish(slot, topicIdx, position, digest)
+			n.Tracer.OnPartialPublish(slot, m.TopicIndex, m.Position, digest)
 		}
 	}
 }

@@ -4,7 +4,6 @@
 #   - 2 topics per node
 #   - 500 fanout nodes per topic (1000 total fanout = 1500 simulated hosts)
 #   - 500 attestors per topic per slot
-#   - committee_size: 500
 #   - 128B attestation_data, 96B signatures
 
 topology:
@@ -60,5 +59,4 @@ simulations:
     publish_interval_ms: 20
     max_peers_per_attestation: 0
     divergent_attestor_fraction: 0.01
-    committee_size: 500
     disable_ihave_gossip: false

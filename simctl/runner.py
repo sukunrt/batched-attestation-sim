@@ -66,42 +66,74 @@ def generate_gml(topology: Topology, latency_multiple: float = 1.0) -> str:
     return "\n".join(lines)
 
 
-def compute_publish_schedule(
-    num_nodes: int,
-    num_slots: int,
+def compute_committees(
+    topology: Topology,
+    num_topics: int,
     num_attestors: int,
-    fanout_nodes: set[int] | None = None,
-    fanout_nodes_per_topic: int = 0,
+    fanout_nodes_per_topic: int,
+    seed: int,
 ) -> dict[int, list[int]]:
-    """Compute which slots each node publishes in.
+    """Compute fixed per-topic committees of size num_attestors.
 
-    Fanout nodes publish in every slot. The remaining publisher budget per slot
-    is filled by randomly selecting from mesh (non-fanout) nodes.
-    num_attestors is per-topic: mesh_attestors = num_attestors - fanout_nodes_per_topic.
+    Each topic's committee = (fanout_nodes_per_topic fanout nodes assigned to
+    that topic) + (num_attestors - fanout_nodes_per_topic mesh nodes drawn
+    from the global mesh pool). The list is ordered: fanout positions
+    [0, fnpt), mesh positions [fnpt, num_attestors). Position == index in
+    the list.
 
-    For slot k, seed RNG with k and pick remaining publishers from mesh nodes.
+    Returns mapping from topic_id to ordered list of node_nums.
+    """
+    fanout_set = set(topology.fanout_nodes)
+    sorted_fanout = sorted(fanout_set)
+    mesh_nodes = sorted(n.num for n in topology.nodes if n.num not in fanout_set)
+    fnpt = fanout_nodes_per_topic
+    mesh_attestors = num_attestors - fnpt
+
+    if mesh_attestors < 0:
+        raise ValueError(
+            f"num_attestors ({num_attestors}) < fanout_nodes_per_topic ({fnpt})"
+        )
+    if mesh_attestors > len(mesh_nodes):
+        raise ValueError(
+            f"need {mesh_attestors} mesh attestors per topic, but only {len(mesh_nodes)} mesh nodes available"
+        )
+    if fnpt > 0 and len(sorted_fanout) < num_topics * fnpt:
+        raise ValueError(
+            f"need {num_topics * fnpt} fanout nodes total, but only {len(sorted_fanout)} available"
+        )
+
+    committees: dict[int, list[int]] = {}
+    for t in range(num_topics):
+        topic_fanout = sorted_fanout[t * fnpt : (t + 1) * fnpt]
+        rng = random.Random(f"{seed}:{t}")
+        topic_mesh = sorted(rng.sample(mesh_nodes, k=mesh_attestors)) if mesh_attestors > 0 else []
+        committees[t] = list(topic_fanout) + topic_mesh
+    return committees
+
+
+def memberships_per_node(committees: dict[int, list[int]]) -> dict[int, list[tuple[int, int]]]:
+    """Invert committees → per-node list of (topic_id, position) entries."""
+    result: dict[int, list[tuple[int, int]]] = {}
+    for topic, members in committees.items():
+        for position, node_num in enumerate(members):
+            result.setdefault(node_num, []).append((topic, position))
+    for entries in result.values():
+        entries.sort()
+    return result
+
+
+def compute_publish_schedule(
+    num_slots: int,
+    committees: dict[int, list[int]],
+) -> dict[int, list[int]]:
+    """Every committee member publishes every slot.
+
     Returns mapping from node_num to sorted list of slot numbers.
     """
-    if fanout_nodes is None:
-        fanout_nodes = set()
-
-    schedule: dict[int, list[int]] = {i: [] for i in range(num_nodes)}
-    mesh_nodes = [i for i in range(num_nodes) if i not in fanout_nodes]
-    mesh_attestors = num_attestors - fanout_nodes_per_topic
-
-    for slot in range(1, num_slots + 1):
-        # All fanout nodes publish every slot
-        for node_num in fanout_nodes:
-            schedule[node_num].append(slot)
-
-        # Fill remaining budget from mesh nodes
-        if mesh_attestors > 0:
-            rng = random.Random(slot)
-            publishers = rng.sample(mesh_nodes, k=mesh_attestors)
-            for node_num in publishers:
-                schedule[node_num].append(slot)
-
-    return schedule
+    publishers: set[int] = set()
+    for members in committees.values():
+        publishers.update(members)
+    return {n: list(range(1, num_slots + 1)) for n in sorted(publishers)}
 
 
 def compute_peer_lists(topology: Topology) -> dict[int, list[int]]:
@@ -139,11 +171,10 @@ def generate_shadow_yaml(
     config_file_path: str,
     publish_schedule: dict[int, list[int]],
     peer_lists: dict[int, list[int]],
+    memberships: dict[int, list[tuple[int, int]]],
 ) -> dict[str, Any]:
     """Generate Shadow configuration dictionary for attestations."""
     fanout_nodes = set(topology.fanout_nodes)
-    sorted_fanout = sorted(fanout_nodes)
-    fanout_nodes_per_topic = config.topology.fanout_nodes_per_topic
     gml = generate_gml(topology, latency_multiple=config.topology.latency_multiple)
 
     hosts: dict[str, Any] = {}
@@ -157,14 +188,16 @@ def generate_shadow_yaml(
             f"-node-num={node_num}",
             f"-publish-mode={publish_mode}",
         ]
-        if is_fanout and fanout_nodes_per_topic > 0:
-            fanout_offset = sorted_fanout.index(node_num)
-            topic_idx = fanout_offset // fanout_nodes_per_topic
-            args_parts.append(f"-fanout-topic-index={topic_idx}")
         if config.disable_ihave_gossip:
             args_parts.append("-disable-ihave-gossip")
         if config.use_partial_messages:
             args_parts.append("-use-partial-messages")
+
+        node_memberships = memberships.get(node_num, [])
+        if node_memberships:
+            args_parts.append(
+                "-committee-memberships=" + ";".join(f"{t}:{p}" for t, p in node_memberships)
+            )
 
         slots = publish_schedule.get(node_num, [])
         if slots:
@@ -282,25 +315,15 @@ def run_simulation(
 
     peer_lists = compute_peer_lists(topology)
 
-    publish_schedule = compute_publish_schedule(
-        num_nodes=len(topology.nodes),
-        num_slots=sim.num_slots,
+    committees = compute_committees(
+        topology=topology,
+        num_topics=sim.num_topics,
         num_attestors=sim.num_attestors,
-        fanout_nodes=topology.fanout_nodes,
         fanout_nodes_per_topic=sim.topology.fanout_nodes_per_topic,
+        seed=sim.topology.seed,
     )
-
-    # Compute per-topic attestor lists for partial messages.
-    # Each topic's list is sorted(mesh_nodes ∪ fanout_nodes_for_topic).
-    # A node's attestor index is its position in its topic's list.
-    fanout_nodes_set = set(topology.fanout_nodes)
-    sorted_fanout = sorted(fanout_nodes_set)
-    mesh_nodes = sorted(n.num for n in topology.nodes if n.num not in fanout_nodes_set)
-    fnpt = sim.topology.fanout_nodes_per_topic
-    attestor_lists: list[list[int]] = []
-    for t in range(sim.num_topics):
-        topic_fanout = sorted_fanout[t * fnpt : (t + 1) * fnpt]
-        attestor_lists.append(sorted(mesh_nodes + topic_fanout))
+    memberships = memberships_per_node(committees)
+    publish_schedule = compute_publish_schedule(num_slots=sim.num_slots, committees=committees)
 
     # Create unique run directory
     run_dir = _create_run_dir(output_dir, num_nodes=len(topology.nodes), gossip=sim.gossipsub_params)
@@ -308,16 +331,16 @@ def run_simulation(
     # Save mesh topology and config
     topology.save(run_dir / "topology.json")
     config_data = config.model_dump()
-    config_data["simulation"]["attestor_lists"] = attestor_lists
     config_file = run_dir / "config.yaml"
     with open(config_file, "w") as f:
         yaml.dump(config_data, f, default_flow_style=False)
 
-    # Save fanout nodes and publish schedule
+    # Save fanout nodes, publish schedule, and per-topic committee membership
     with open(run_dir / "schedule.json", "w") as f:
         json.dump(
             {
                 "fanout_nodes": sorted(topology.fanout_nodes),
+                "committee_membership": {str(t): members for t, members in committees.items()},
                 "publish_schedule": {str(k): v for k, v in publish_schedule.items()},
                 "peer_lists": {str(k): v for k, v in peer_lists.items()},
             },
@@ -342,6 +365,7 @@ def run_simulation(
         config_file_path=str(config_file.resolve()),
         publish_schedule=publish_schedule,
         peer_lists=peer_lists,
+        memberships=memberships,
     )
     write_shadow_config(shadow_config, run_dir / "shadow.yaml")
 

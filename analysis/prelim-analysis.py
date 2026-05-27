@@ -2,9 +2,15 @@
 """Preliminary analysis for attestation runs (classic + partial-message).
 
 Shows:
-  - p10..p100 of time-to-receive-95% of attestations across (node, slot, committee)
-  - Final sentBytesTotal / receivedBytesTotal + peak bps for a few randomly picked
-    mesh nodes (super vs regular), and the aggregate mean across each class.
+  - time-to-receive-95% of attestations across (node, slot, committee), p25..p99.
+  - Received wire composition for a few randomly picked mesh nodes (super vs
+    regular): total bytes plus the split into attestation_data / signature /
+    control bytes, the count of attestations received, and the share of
+    attestation-related bytes that is attestation_data. This is what exposes why
+    partial wins: classic re-ships the full AttestationData for every attestation
+    and every duplicate, so its att_data share is high; partial ships the shared
+    AttestationData once per bucket, so its bytes are mostly signatures + small
+    control bitmaps.
 
 Usage:
     uv run python analysis/prelim-analysis.py <dir> [--num-samples N]
@@ -40,23 +46,30 @@ PARTIAL_RECEIVED_PAT = re.compile(
 BW_PAT = re.compile(
     r'\bbandwidth\b.*?\bnode=(\d+).*?\bsentbps=(\d+).*?\breceivedbps=(\d+).*?\bsentBytesTotal=(\d+).*?\breceivedBytesTotal=(\d+)'
 )
-# Gossip-control bandwidth (from rpc_tracer.go). Lines are emitted in slog
-# text format: "time=... level=INFO msg=<key> ... <field>=N ...".
+# Wire-level attestation accounting (from rpc_tracer.go), received side. Lines
+# are slog text format: "time=... level=INFO msg=<key> ... <field>=N ...".
 #
-# Classic mode uses gossipsub IHAVE/IWANT:
-#   - topic_ihave_sent / topic_ihave_received: per-topic, with ihave_size
-#   - rpc_sent / rpc_received: per-RPC, with iwant_size (often 0; bundles)
-# Partial mode uses partial-extension parts metadata:
-#   - partial_sent / partial_received: with metadata_bytes (the
-#     EncodedPartsMetadata blob for the tick)
+# Both modes now log att_count / att_data_bytes / sig_bytes per received RPC, so
+# we can split received bytes into attestation payload (data vs signature) and
+# control:
+#   - classic: topic_message_received carries one Attestation (att_count=1).
+#   - partial: partial_received carries a batched envelope (att_count = #sigs)
+#     plus metadata_bytes (the parts-metadata control blob).
+# Control bytes received:
+#   - classic = gossipsub IHAVE (topic_ihave_received, ihave_size) + IWANT
+#     (rpc_received, iwant_size).
+#   - partial = parts metadata (partial_received, metadata_bytes).
 # Note: the SlogTracer's app-level "partial_received" lifecycle event also
 # appears in the same stderr but has slot=/position=/latency_ms= rather than
-# metadata_bytes=, so it won't collide with the wire-level pattern below.
-IHAVE_SENT_PAT = re.compile(r'msg=topic_ihave_sent\b.*?\bihave_size=(\d+)')
+# att_count=/metadata_bytes=, so it won't collide with the wire patterns below.
+CLASSIC_RECV_PAT = re.compile(
+    r'msg=topic_message_received\b.*?\batt_count=(\d+)\b.*?\batt_data_bytes=(\d+)\b.*?\bsig_bytes=(\d+)'
+)
+PARTIAL_DATA_RECV_PAT = re.compile(
+    r'msg=partial_received\b.*?\batt_count=(\d+)\b.*?\batt_data_bytes=(\d+)\b.*?\bsig_bytes=(\d+)'
+)
 IHAVE_RECV_PAT = re.compile(r'msg=topic_ihave_received\b.*?\bihave_size=(\d+)')
-IWANT_SENT_PAT = re.compile(r'msg=rpc_sent\b.*?\biwant_size=(\d+)')
 IWANT_RECV_PAT = re.compile(r'msg=rpc_received\b.*?\biwant_size=(\d+)')
-PARTIAL_MD_SENT_PAT = re.compile(r'msg=partial_sent\b.*?\bmetadata_bytes=(\d+)')
 PARTIAL_MD_RECV_PAT = re.compile(r'msg=partial_received\b.*?\bmetadata_bytes=(\d+)')
 
 
@@ -73,23 +86,22 @@ def load_topology(exp_dir: Path) -> dict:
 def parse_node_stderr(stderr_path: Path, parse_bw: bool = False):
     """Return (received_records, bw_stats).
 
-    received_records: list of dicts with slot, committee_index, latency_ms.
-    bw_stats: dict with sent_total, recv_total, peak_sent_bps, peak_recv_bps
-              (or None if parse_bw is False / no bandwidth lines seen).
+    received_records: list of dicts with slot, committee, latency_ms.
+    bw_stats: dict with totals plus the received wire composition
+              (att_data_recv / sig_recv / att_recv and the control counters), or
+              None if parse_bw is False / no bandwidth lines seen.
     """
     records = []
     sent_total = None
     recv_total = None
     peak_sent_bps = 0
     peak_recv_bps = 0
-    gossip_sent_bytes = 0
-    gossip_recv_bytes = 0
-    ihave_sent_bytes = 0
-    ihave_recv_bytes = 0
-    iwant_sent_bytes = 0
-    iwant_recv_bytes = 0
-    md_sent_bytes = 0
-    md_recv_bytes = 0
+    att_data_recv = 0   # attestation_data bytes received (deduped per bucket in partial)
+    sig_recv = 0        # signature bytes received
+    att_recv = 0        # attestations received (instances on the wire, with dups)
+    ihave_recv = 0
+    iwant_recv = 0
+    md_recv = 0
     with open(stderr_path) as f:
         for line in f:
             m = RECEIVED_PAT.search(line)
@@ -111,54 +123,48 @@ def parse_node_stderr(stderr_path: Path, parse_bw: bool = False):
             if parse_bw:
                 mb = BW_PAT.search(line)
                 if mb:
-                    sent_bps = int(mb.group(2))
-                    recv_bps = int(mb.group(3))
                     sent_total = int(mb.group(4))
                     recv_total = int(mb.group(5))
-                    peak_sent_bps = max(peak_sent_bps, sent_bps)
-                    peak_recv_bps = max(peak_recv_bps, recv_bps)
+                    peak_sent_bps = max(peak_sent_bps, int(mb.group(2)))
+                    peak_recv_bps = max(peak_recv_bps, int(mb.group(3)))
                     continue
-                gm = IHAVE_SENT_PAT.search(line)
+                gm = CLASSIC_RECV_PAT.search(line)
                 if gm:
-                    ihave_sent_bytes += int(gm.group(1))
+                    att_recv += int(gm.group(1))
+                    att_data_recv += int(gm.group(2))
+                    sig_recv += int(gm.group(3))
+                    continue
+                gm = PARTIAL_DATA_RECV_PAT.search(line)
+                if gm:
+                    att_recv += int(gm.group(1))
+                    att_data_recv += int(gm.group(2))
+                    sig_recv += int(gm.group(3))
+                    # partial_received also carries the control (parts metadata).
+                    mdm = PARTIAL_MD_RECV_PAT.search(line)
+                    if mdm:
+                        md_recv += int(mdm.group(1))
                     continue
                 gm = IHAVE_RECV_PAT.search(line)
                 if gm:
-                    ihave_recv_bytes += int(gm.group(1))
-                    continue
-                gm = IWANT_SENT_PAT.search(line)
-                if gm:
-                    iwant_sent_bytes += int(gm.group(1))
+                    ihave_recv += int(gm.group(1))
                     continue
                 gm = IWANT_RECV_PAT.search(line)
                 if gm:
-                    iwant_recv_bytes += int(gm.group(1))
-                    continue
-                gm = PARTIAL_MD_SENT_PAT.search(line)
-                if gm:
-                    md_sent_bytes += int(gm.group(1))
-                    continue
-                gm = PARTIAL_MD_RECV_PAT.search(line)
-                if gm:
-                    md_recv_bytes += int(gm.group(1))
+                    iwant_recv += int(gm.group(1))
                     continue
     bw = None
     if sent_total is not None:
-        gossip_sent_bytes = ihave_sent_bytes + iwant_sent_bytes + md_sent_bytes
-        gossip_recv_bytes = ihave_recv_bytes + iwant_recv_bytes + md_recv_bytes
         bw = {
             "sent_total": sent_total,
             "recv_total": recv_total,
             "peak_sent_bps": peak_sent_bps,
             "peak_recv_bps": peak_recv_bps,
-            "gossip_sent": gossip_sent_bytes,
-            "gossip_recv": gossip_recv_bytes,
-            "ihave_sent": ihave_sent_bytes,
-            "ihave_recv": ihave_recv_bytes,
-            "iwant_sent": iwant_sent_bytes,
-            "iwant_recv": iwant_recv_bytes,
-            "md_sent": md_sent_bytes,
-            "md_recv": md_recv_bytes,
+            "att_data_recv": att_data_recv,
+            "sig_recv": sig_recv,
+            "att_recv": att_recv,
+            "ihave_recv": ihave_recv,
+            "iwant_recv": iwant_recv,
+            "md_recv": md_recv,
         }
     return records, bw
 
@@ -214,18 +220,17 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
     reg_sorted = sorted(reg_pick & node_bw.keys())
 
     def class_bw(nodes: list[int]) -> dict:
-        keys = ["sent_total", "recv_total", "ihave_sent", "ihave_recv",
-                "iwant_sent", "iwant_recv", "md_sent", "md_recv"]
+        keys = ["sent_total", "recv_total", "att_data_recv", "sig_recv",
+                "att_recv", "ihave_recv", "iwant_recv", "md_recv"]
         if not nodes:
-            return {k: 0.0 for k in keys}
-        d = {k: sum(node_bw[n][k] for n in nodes) / len(nodes) for k in keys}
-        # Gossip = IHAVE+IWANT in classic, partial-md in partial.
-        if mode == "partial":
-            d["gossip_sent"] = d["md_sent"]
-            d["gossip_recv"] = d["md_recv"]
+            d = {k: 0.0 for k in keys}
         else:
-            d["gossip_sent"] = d["ihave_sent"] + d["iwant_sent"]
-            d["gossip_recv"] = d["ihave_recv"] + d["iwant_recv"]
+            d = {k: sum(node_bw[n][k] for n in nodes) / len(nodes) for k in keys}
+        # Control received = IHAVE+IWANT in classic, parts metadata in partial.
+        if mode == "partial":
+            d["control_recv"] = d["md_recv"]
+        else:
+            d["control_recv"] = d["ihave_recv"] + d["iwant_recv"]
         return d
 
     return {
@@ -296,6 +301,14 @@ def pct_delta(c: float, p: float) -> str:
     return f"{(p - c) / c * 100:+.1f}%"
 
 
+def data_share(d: dict) -> float:
+    """Percent of attestation-related received bytes (att_data + sig + control)
+    that is attestation_data. High for classic (full data re-shipped per
+    attestation and per duplicate); low for partial (data deduped per bucket)."""
+    denom = d["att_data_recv"] + d["sig_recv"] + d["control_recv"]
+    return (d["att_data_recv"] / denom * 100) if denom else 0.0
+
+
 def print_comparison(classic: dict, partial: dict):
     # Latency
     pcts = [25, 50, 95, 99]
@@ -311,21 +324,24 @@ def print_comparison(classic: dict, partial: dict):
 
     nt_c = classic["num_topics"]
     nt_p = partial["num_topics"]
+    # (header, bw-dict key, unit divisor)
     cols = [
-        ("sent (MB)",        "sent_total",  1e6),
-        ("recv (MB)",        "recv_total",  1e6),
-        ("gossip sent (KB)", "gossip_sent", 1e3),
-        ("gossip recv (KB)", "gossip_recv", 1e3),
+        ("sent (MB)",     "sent_total",    1e6),
+        ("recv (MB)",     "recv_total",    1e6),
+        ("att_data (KB)", "att_data_recv", 1e3),
+        ("sig (KB)",      "sig_recv",      1e3),
+        ("control (KB)",  "control_recv",  1e3),
+        ("att recv",      "att_recv",      1.0),
     ]
     for label, key in [("super", "super_bw"), ("regular", "regular_bw")]:
         cb = classic[key]
         pb = partial[key]
-        headers = ["mode"] + [h for h, _, _ in cols]
-        c_row = ["classic"] + [f"{cb[k]/nt_c/unit:.2f}" for _, k, unit in cols]
-        p_row = ["partial"] + [f"{pb[k]/nt_p/unit:.2f}" for _, k, unit in cols]
-        d_row = ["delta"]   + [pct_delta(cb[k]/nt_c, pb[k]/nt_p) for _, k, _ in cols]
+        headers = ["mode"] + [h for h, _, _ in cols] + ["att_data %"]
+        c_row = ["classic"] + [f"{cb[k]/nt_c/unit:.2f}" for _, k, unit in cols] + [f"{data_share(cb):.1f}%"]
+        p_row = ["partial"] + [f"{pb[k]/nt_p/unit:.2f}" for _, k, unit in cols] + [f"{data_share(pb):.1f}%"]
+        d_row = ["delta"]   + [pct_delta(cb[k]/nt_c, pb[k]/nt_p) for _, k, _ in cols] + [f"{data_share(pb) - data_share(cb):+.1f}pp"]
         print_table(
-            f"Bandwidth used — {label} (mean per sampled mesh node, per topic; assumes equal usage across {nt_c} topics)",
+            f"Received wire composition — {label} (mean per sampled mesh node, per topic; assumes equal usage across {nt_c} topics)",
             headers, [c_row, p_row, d_row],
         )
 

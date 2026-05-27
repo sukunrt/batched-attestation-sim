@@ -54,5 +54,4 @@ simulation:
   divergent_attestor_fraction: 0.01    # fraction of attestors with different chain head
   validation_batch_window_ms: 5        # collect attestations for this long before batch-validating
   per_attestation_validation_us: 100   # per-attestation BLS verify cost in microseconds
-  committee_size: 2048                 # bitmap length for attestor_indices/available/requests
                                        # (must be >= num_nodes + num fanout nodes; default 2048)

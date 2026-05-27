@@ -24,5 +24,6 @@ packages = ["simctl"]
 
 [dependency-groups]
 dev = [
+    "matplotlib>=3.10.9",
     "numpy>=2.4.4",
 ]

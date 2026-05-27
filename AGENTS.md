@@ -72,16 +72,21 @@ use_partial_messages: true
 The partial-message path implements the spec at
 `../ethp2p/specs/draft-committee-attestation.md`. Wire shape:
 
-- `BatchedAttestation { attestation_data, attestor_indices (bitmap[committee_size]), signatures[] }`.
+- `BatchedAttestation { attestation_data, attestor_indices (bitmap[num_attestors]), signatures[] }`.
 - `CommitteeAttestationPartsMetadata { slot, attestation_data, available (bitmap), requests (bitmap) }`.
 - `ControlEnvelope` wraps `repeated CommitteeAttestationPartsMetadata` per peer per tick.
 - `BatchedAttestationEnvelope` wraps `repeated BatchedAttestation` per peer per tick.
 
-The `attestor_indices` / `available` / `requests` fields are fixed-width bitmaps
-of length `committee_size` bits (default 2048, configurable per run with
-`committee_size:` in YAML). Bit `i` set means committee position `i` contributed
-or is wanted/held. Committee position is statically assigned: position == node
-number. Startup asserts `node_num < committee_size`.
+Each topic has a fixed committee of size `num_attestors` chosen once at sim
+build by simctl: `fanout_nodes_per_topic` fanout nodes assigned to that topic
+(positions `[0, fnpt)`) plus `num_attestors - fnpt` mesh nodes drawn from the
+global mesh pool (positions `[fnpt, num_attestors)`). Committee membership is
+written to `schedule.json` as `committee_membership: {topic_id: [node_nums…]}`
+and plumbed to each Go process via the `-committee-memberships=t0:p0;t1:p1`
+CLI flag. Position is the index into the per-topic committee list; node
+identity (`node_num`) is decoupled from committee position. The
+`attestor_indices` / `available` / `requests` bitmaps are sized
+`ceil(num_attestors / 8)` bytes.
 
 In partial-message mode:
 
@@ -128,7 +133,7 @@ Structured slog lines emitted by partial mode (use `att_digest` — the hex-enco
 - `partial_recv_metadata` — per-bucket metadata received.
 - `partial_recv_batch` — per-bucket data batch received.
 - `attestation_validated` — verifier callback promoted a position to validated.
-- `rpc_sent` / `rpc_received` / `partial_sent` / `partial_received` — wire-level RPC counters from `rpc_tracer.go`.
+- `rpc_sent` / `rpc_received` / `topic_ihave_*` / `topic_message_*` / `partial_sent` / `partial_received` — wire-level lines from `rpc_tracer.go`, attestation-aware (`att_count`, `att_data_bytes`, `sig_bytes`; partial adds `data_batches` / `meta_count` / `available_ones` / `requests_ones`); consumed by `analysis/prelim-analysis.py` to compare classic vs partial.
 
 
 ## Timing Notes
