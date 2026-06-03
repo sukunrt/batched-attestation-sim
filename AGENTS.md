@@ -117,8 +117,6 @@ disable_ihave_gossip: false
 
 Do not set `disable_ihave_gossip: true` unless the user wants the no-IHAVE variant.
 
-`ihave_gossip_degree: 0` means use the default degree of 6, matching gossipsub `Dlazy`.
-
 ### Partial-mode log keys
 
 Structured slog lines emitted by partial mode (use `att_digest` — the hex-encoded

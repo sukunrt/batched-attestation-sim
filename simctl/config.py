@@ -119,8 +119,6 @@ class AttestationSimConfig(BaseModel):
 
     # Partial-messages path (lists of attestor IDs + ephemeral iwant)
     use_partial_messages: bool = False
-    # 0 = default 6 (matches gossipsub Dlazy)
-    ihave_gossip_degree: int = 0
 
 
 class AttestationConfig(BaseModel):
@@ -166,8 +164,6 @@ class AttestationSimParams(BaseModel):
 
     # Partial-messages path (lists of attestor IDs + ephemeral iwant)
     use_partial_messages: bool = False
-    # 0 = default 6 (matches gossipsub Dlazy)
-    ihave_gossip_degree: int = 0
 
 
 class AttestationExperimentConfig(BaseModel):

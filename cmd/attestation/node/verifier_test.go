@@ -146,7 +146,7 @@ func TestVerifierManyItemsNoneDropped(t *testing.T) {
 
 		const n = 50
 		var wg sync.WaitGroup
-		for i := 0; i < n; i++ {
+		for i := range n {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
@@ -246,7 +246,7 @@ func TestVerifierSubmitAndWaitMultipleConcurrent(t *testing.T) {
 		var wg sync.WaitGroup
 		var done [4]bool
 		var mu sync.Mutex
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()

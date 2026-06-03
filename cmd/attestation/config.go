@@ -37,9 +37,6 @@ type SimConfig struct {
 
 	// Partial-messages path (lists of attestor IDs + ephemeral iwant).
 	UsePartialMessages bool `yaml:"use_partial_messages"`
-	// IHaveGossipDegree caps how many gossip peers receive an IHAVE on each
-	// publish tick. 0 (unset) defaults to 6 (matches gossipsub Dlazy).
-	IHaveGossipDegree int `yaml:"ihave_gossip_degree"`
 }
 
 func (s *SimConfig) PublishInterval() time.Duration {
@@ -58,15 +55,6 @@ func (s *SimConfig) EffectiveMaxPeersPerAttestation() int {
 
 func (s *SimConfig) BandwidthLogFrequency() time.Duration {
 	return time.Duration(s.BandwidthLogFrequencyMs) * time.Millisecond
-}
-
-// EffectiveIHaveGossipDegree returns the configured IHAVE fanout per tick,
-// defaulting to 6 (gossipsub Dlazy) when unset.
-func (s *SimConfig) EffectiveIHaveGossipDegree() int {
-	if s.IHaveGossipDegree <= 0 {
-		return 6
-	}
-	return s.IHaveGossipDegree
 }
 
 func LoadConfig(path string) (*SimConfig, error) {

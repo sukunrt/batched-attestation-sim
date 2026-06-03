@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
-	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -28,11 +27,10 @@ const testCommitteeSize = 128
 
 // newPartialUnitManager builds a partial-message manager with a backing
 // batchVerifier suitable for unit tests. No real network is involved.
-func newPartialUnitManager(t *testing.T) *partialAttesattionManager {
+func newPartialUnitManager(t *testing.T) *partialAttestationManager {
 	t.Helper()
 	node := &Node{
 		MaxPeersPerAttestation:     16,
-		IHaveGossipDegree:          6,
 		CommitteeSize:              testCommitteeSize,
 		VerificationDelay:          func() time.Duration { return 5 * time.Millisecond },
 		PerAttestationVerification: 0,
@@ -62,7 +60,7 @@ type collected struct {
 // every emitted PublishAction.
 func runPublishActions(
 	t *testing.T,
-	m *partialAttesattionManager,
+	m *partialAttestationManager,
 	topic string,
 	slot int,
 	peerStates map[peer.ID]peerState,
@@ -127,27 +125,6 @@ func TestNewCommitteeBitmapZero(t *testing.T) {
 	assert.Equal(t, 0, b.OnesCount())
 }
 
-func TestIterBitsBoundedByCommitteeSize(t *testing.T) {
-	b := newCommitteeBitmap(16)
-	b.Set(0)
-	b.Set(5)
-	b.Set(15)
-	// Last legal position is 15.
-	assert.Equal(t, []int{0, 5, 15}, slices.Collect(iterBits(b, 16)))
-}
-
-func TestMergeBitmapOrsIntoDest(t *testing.T) {
-	dst := newCommitteeBitmap(16)
-	dst.Set(0)
-	src := newCommitteeBitmap(16)
-	src.Set(1)
-	src.Set(8)
-	got := mergeBitmap(dst, []byte(src), 16)
-	assert.True(t, got.Get(0))
-	assert.True(t, got.Get(1))
-	assert.True(t, got.Get(8))
-}
-
 // -----------------------------------------------------------------------------
 // Bucket behavior
 // -----------------------------------------------------------------------------
@@ -157,8 +134,8 @@ func TestPublishLocalCreatesBucketAndMarksValidated(t *testing.T) {
 	m.publishLocal("topic0", 5, 3, []byte("sig"), []byte("dataA"))
 	ss := m.getSlotState("topic0", 5)
 	require.NotNil(t, ss)
-	require.Len(t, ss.buckets, 1)
-	b := ss.buckets["dataA"]
+	require.Len(t, ss.attestationsMap, 1)
+	b := ss.attestationsMap["dataA"]
 	require.NotNil(t, b)
 	assert.Contains(t, b.validated, 3)
 	assert.NotContains(t, b.validating, 3)
@@ -170,9 +147,9 @@ func TestPublishLocalSeparatesBucketsByAttestationData(t *testing.T) {
 	m.publishLocal("topic0", 5, 3, []byte("sig"), []byte("dataB"))
 	ss := m.getSlotState("topic0", 5)
 	require.NotNil(t, ss)
-	require.Len(t, ss.buckets, 2, "different attestation_data must produce separate buckets at the same slot")
-	assert.Contains(t, ss.buckets["dataA"].validated, 3)
-	assert.Contains(t, ss.buckets["dataB"].validated, 3)
+	require.Len(t, ss.attestationsMap, 2, "different attestation_data must produce separate buckets at the same slot")
+	assert.Contains(t, ss.attestationsMap["dataA"].validated, 3)
+	assert.Contains(t, ss.attestationsMap["dataB"].validated, 3)
 }
 
 func TestPublishLocalDuplicateNoop(t *testing.T) {
@@ -180,12 +157,12 @@ func TestPublishLocalDuplicateNoop(t *testing.T) {
 	m.publishLocal("topic0", 1, 3, []byte("sig"), []byte("d"))
 	m.publishLocal("topic0", 1, 3, []byte("sig-dup"), []byte("d"))
 	ss := m.getSlotState("topic0", 1)
-	b := ss.buckets["d"]
+	b := ss.attestationsMap["d"]
 	assert.Equal(t, "sig", string(b.attestations[3].Signature), "duplicate add must not overwrite")
 }
 
 func TestBucketAddReceivedPendingValidation(t *testing.T) {
-	b := newAttDataBucket([]byte("shared-data"))
+	b := newAttestationState([]byte("shared-data"))
 	newEntries := b.addReceived([]int{2, 5}, [][]byte{[]byte("s2"), []byte("s5")})
 	require.Len(t, newEntries, 2)
 	assert.Contains(t, b.validating, 2)
@@ -203,7 +180,7 @@ func TestMarkValidatedPromotes(t *testing.T) {
 	m := newPartialUnitManager(t)
 	m.publishLocal("topic0", 1, 0, []byte("s"), []byte("d"))
 	ss := m.getSlotState("topic0", 1)
-	b := ss.buckets["d"]
+	b := ss.attestationsMap["d"]
 	entries := b.addReceived([]int{4}, [][]byte{[]byte("s4")})
 	assert.NotContains(t, b.validated, 4)
 
@@ -266,32 +243,29 @@ func TestControlEnvelopeRoundtrip(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestBuildBucketMetadataNilWhenNothingToSay(t *testing.T) {
-	b := newAttDataBucket([]byte("d"))
-	got := buildBucketMetadata(b, peer.ID("p0"), testCommitteeSize, 1, false, nil)
+	b := newAttestationState([]byte("d"))
+	got := getAttestationMetadata(b, testCommitteeSize, 1, false, nil)
 	assert.Nil(t, got)
 }
 
-func TestBuildBucketMetadataAvailableExcludesPeerKnown(t *testing.T) {
-	b := newAttDataBucket([]byte("d"))
+func TestBuildBucketMetadataAvailableIncludesAllValidated(t *testing.T) {
+	b := newAttestationState([]byte("d"))
 	b.validated[0] = struct{}{}
 	b.validated[5] = struct{}{}
 	b.validated[2] = struct{}{}
-	bps := newBucketPeerState(testCommitteeSize)
-	bps.available.Set(2)
-	b.peers[peer.ID("p0")] = bps
 
-	got := buildBucketMetadata(b, peer.ID("p0"), testCommitteeSize, 1, true, nil)
+	got := getAttestationMetadata(b, testCommitteeSize, 1, true, nil)
 	require.NotNil(t, got)
 	gotBm := bitmap.Bitmap(got.Available)
 	assert.True(t, gotBm.Get(0))
-	assert.False(t, gotBm.Get(2), "peer's known bits must be excluded")
+	assert.True(t, gotBm.Get(2))
 	assert.True(t, gotBm.Get(5))
 	assert.Empty(t, got.Requests)
 }
 
 func TestBuildBucketMetadataRequestsPopulated(t *testing.T) {
-	b := newAttDataBucket([]byte("d"))
-	got := buildBucketMetadata(b, peer.ID("p0"), testCommitteeSize, 1, false, []int{1, 4, 8})
+	b := newAttestationState([]byte("d"))
+	got := getAttestationMetadata(b, testCommitteeSize, 1, false, []int{1, 4, 8})
 	require.NotNil(t, got)
 	reqBm := bitmap.Bitmap(got.Requests)
 	for _, pos := range []int{1, 4, 8} {
@@ -300,16 +274,11 @@ func TestBuildBucketMetadataRequestsPopulated(t *testing.T) {
 	assert.Empty(t, got.Available)
 }
 
-func TestBuildBucketMetadataOmittedWhenAvailableEmptyAfterFilter(t *testing.T) {
-	// sendHave=true but peer already has every validated position → no
-	// Available bits to send. With no Want either, returns nil.
-	b := newAttDataBucket([]byte("d"))
-	b.validated[7] = struct{}{}
-	bps := newBucketPeerState(testCommitteeSize)
-	bps.available.Set(7)
-	b.peers[peer.ID("p0")] = bps
-
-	got := buildBucketMetadata(b, peer.ID("p0"), testCommitteeSize, 1, true, nil)
+func TestBuildBucketMetadataNilWhenSendHaveButNoValidated(t *testing.T) {
+	// sendHave=true but nothing validated yet → no Available bits, and with no
+	// Want either, returns nil.
+	b := newAttestationState([]byte("d"))
+	got := getAttestationMetadata(b, testCommitteeSize, 1, true, nil)
 	assert.Nil(t, got)
 }
 
@@ -319,7 +288,7 @@ func TestBuildBucketMetadataOmittedWhenAvailableEmptyAfterFilter(t *testing.T) {
 
 func TestEncodeBatchEmitsIndicesAndOrdersSignatures(t *testing.T) {
 	m := newPartialUnitManager(t)
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	b.attestations[0] = &PartialAttestationEntry{Position: 0, Signature: []byte("sig0"), Data: b.data}
 	b.attestations[5] = &PartialAttestationEntry{Position: 5, Signature: []byte("sig5"), Data: b.data}
 
@@ -337,16 +306,15 @@ func TestEncodeBatchEmitsIndicesAndOrdersSignatures(t *testing.T) {
 
 func TestSelectAndCommitMeshPeerSendsAll(t *testing.T) {
 	m := newPartialUnitManager(t)
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	for _, pos := range []int{0, 1, 2} {
 		b.validated[pos] = struct{}{}
 		b.attestations[pos] = &PartialAttestationEntry{Position: pos, Signature: []byte("s"), Data: b.data}
 	}
 
-	got := m.selectAndCommitSends(b, peer.ID("p0"), false)
+	bps := initAndGetPeerAttestationState(b, peer.ID("p0"), testCommitteeSize)
+	got := m.claimAttestationsToSend(b, bps, false)
 	assert.ElementsMatch(t, []int{0, 1, 2}, got)
-	bps := b.peers[peer.ID("p0")]
-	require.NotNil(t, bps)
 	assert.True(t, bps.available.Get(0))
 	assert.True(t, bps.available.Get(1))
 	assert.True(t, bps.available.Get(2))
@@ -354,51 +322,51 @@ func TestSelectAndCommitMeshPeerSendsAll(t *testing.T) {
 
 func TestSelectAndCommitGossipPeerNoWantNothing(t *testing.T) {
 	m := newPartialUnitManager(t)
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	b.validated[0] = struct{}{}
 	b.attestations[0] = &PartialAttestationEntry{Position: 0, Signature: []byte("s"), Data: b.data}
 
-	got := m.selectAndCommitSends(b, peer.ID("p0"), true)
+	bps := newPeerAttestationState(testCommitteeSize)
+	got := m.claimAttestationsToSend(b, bps, true)
 	assert.Empty(t, got)
 }
 
 func TestSelectAndCommitGossipPeerHonorsPendingWant(t *testing.T) {
 	m := newPartialUnitManager(t)
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	for _, pos := range []int{0, 1, 2} {
 		b.validated[pos] = struct{}{}
 		b.attestations[pos] = &PartialAttestationEntry{Position: pos, Signature: []byte("s"), Data: b.data}
 	}
-	bps := newBucketPeerState(testCommitteeSize)
+	bps := newPeerAttestationState(testCommitteeSize)
 	bps.pendingWant.Set(1)
-	b.peers[peer.ID("p0")] = bps
 
-	got := m.selectAndCommitSends(b, peer.ID("p0"), true)
+	got := m.claimAttestationsToSend(b, bps, true)
 	assert.Equal(t, []int{1}, got)
 }
 
 func TestSelectAndCommitSkipsAlreadyAvailable(t *testing.T) {
 	m := newPartialUnitManager(t)
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	b.validated[0] = struct{}{}
 	b.attestations[0] = &PartialAttestationEntry{Position: 0, Signature: []byte("s"), Data: b.data}
-	bps := newBucketPeerState(testCommitteeSize)
+	bps := newPeerAttestationState(testCommitteeSize)
 	bps.available.Set(0)
-	b.peers[peer.ID("p0")] = bps
 
-	got := m.selectAndCommitSends(b, peer.ID("p0"), false)
+	got := m.claimAttestationsToSend(b, bps, false)
 	assert.Empty(t, got)
 }
 
 func TestSelectAndCommitBudgetExhausted(t *testing.T) {
 	m := newPartialUnitManager(t)
 	m.node.MaxPeersPerAttestation = 2
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	b.validated[0] = struct{}{}
 	b.attestations[0] = &PartialAttestationEntry{Position: 0, Signature: []byte("s"), Data: b.data}
-	b.perSendCount[0] = 2
+	b.sendCount[0] = 2
 
-	got := m.selectAndCommitSends(b, peer.ID("p0"), false)
+	bps := newPeerAttestationState(testCommitteeSize)
+	got := m.claimAttestationsToSend(b, bps, false)
 	assert.Empty(t, got)
 }
 
@@ -406,11 +374,14 @@ func TestSelectAndCommitBudgetExhausted(t *testing.T) {
 // selectIWantTargets
 // -----------------------------------------------------------------------------
 
-func TestSelectIWantTargetsCapsAtTwoPerPosition(t *testing.T) {
-	b := newAttDataBucket([]byte("d"))
+func TestSelectIWantTargetsCapsAtMaxPerPosition(t *testing.T) {
+	b := newAttestationState([]byte("d"))
 	peers := map[peer.ID]peerState{}
-	for _, id := range []peer.ID{"p0", "p1", "p2"} {
-		bps := newBucketPeerState(testCommitteeSize)
+	// More peers than the cap, all advertising the same position.
+	const numPeers = maxIWantPerPosition + 3
+	for i := range numPeers {
+		id := peer.ID(fmt.Sprintf("p%d", i))
+		bps := newPeerAttestationState(testCommitteeSize)
 		bps.available.Set(5)
 		b.peers[id] = bps
 		peers[id] = peerState{gossipPeer: true}
@@ -424,15 +395,15 @@ func TestSelectIWantTargetsCapsAtTwoPerPosition(t *testing.T) {
 			}
 		}
 	}
-	assert.Equal(t, 2, count, "must cap at maxIWantPerPosition=2")
-	assert.Equal(t, 2, b.requestSentCount[5])
+	assert.Equal(t, maxIWantPerPosition, count, "must cap at maxIWantPerPosition")
+	assert.Equal(t, maxIWantPerPosition, b.requestCount[5])
 }
 
 func TestSelectIWantTargetsSkipsPositionWeAlreadyHave(t *testing.T) {
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	b.attestations[5] = &PartialAttestationEntry{Position: 5}
 	peers := map[peer.ID]peerState{peer.ID("p0"): {gossipPeer: true}}
-	bps := newBucketPeerState(testCommitteeSize)
+	bps := newPeerAttestationState(testCommitteeSize)
 	bps.available.Set(5)
 	b.peers["p0"] = bps
 	wants := selectIWantTargets(b, peers, testCommitteeSize)
@@ -440,9 +411,9 @@ func TestSelectIWantTargetsSkipsPositionWeAlreadyHave(t *testing.T) {
 }
 
 func TestSelectIWantTargetsIgnoresNonGossipPeers(t *testing.T) {
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	peers := map[peer.ID]peerState{peer.ID("p0"): {gossipPeer: false}}
-	bps := newBucketPeerState(testCommitteeSize)
+	bps := newPeerAttestationState(testCommitteeSize)
 	bps.available.Set(5)
 	b.peers["p0"] = bps
 	wants := selectIWantTargets(b, peers, testCommitteeSize)
@@ -450,9 +421,9 @@ func TestSelectIWantTargetsIgnoresNonGossipPeers(t *testing.T) {
 }
 
 func TestSelectIWantTargetsSortsPerPeerOutput(t *testing.T) {
-	b := newAttDataBucket([]byte("d"))
+	b := newAttestationState([]byte("d"))
 	peers := map[peer.ID]peerState{peer.ID("p0"): {gossipPeer: true}}
-	bps := newBucketPeerState(testCommitteeSize)
+	bps := newPeerAttestationState(testCommitteeSize)
 	bps.available.Set(8)
 	bps.available.Set(1)
 	bps.available.Set(4)
@@ -466,12 +437,12 @@ func TestSelectIWantTargetsSortsPerPeerOutput(t *testing.T) {
 // selectIHaveRecipients
 // -----------------------------------------------------------------------------
 
-func TestSelectIHaveRecipientsRespectsDegreeCap(t *testing.T) {
+func TestSelectIHaveRecipientsSelectsAllEligibleGossipPeers(t *testing.T) {
 	m := newPartialUnitManager(t)
 	now := time.Now()
 	peers := makePeers(10, true)
-	got := m.selectIHaveRecipients(peers, now, 3)
-	assert.Len(t, got, 3)
+	got := m.selectIHaveRecipients(peers, now)
+	assert.Len(t, got, 10)
 }
 
 func TestSelectIHaveRecipientsSkipsNonGossip(t *testing.T) {
@@ -481,7 +452,7 @@ func TestSelectIHaveRecipientsSkipsNonGossip(t *testing.T) {
 		peer.ID("g0"): {gossipPeer: true},
 		peer.ID("m0"): {gossipPeer: false},
 	}
-	got := m.selectIHaveRecipients(peers, now, 6)
+	got := m.selectIHaveRecipients(peers, now)
 	assert.Len(t, got, 1)
 	assert.Contains(t, got, peer.ID("g0"))
 }
@@ -494,7 +465,7 @@ func TestSelectIHaveRecipientsSkipsRateLimited(t *testing.T) {
 		peer.ID("g1"): {gossipPeer: true},
 	}
 	m.peerNextGossipAt[peer.ID("g0")] = now.Add(1 * time.Hour)
-	got := m.selectIHaveRecipients(peers, now, 6)
+	got := m.selectIHaveRecipients(peers, now)
 	assert.Len(t, got, 1)
 	assert.Contains(t, got, peer.ID("g1"))
 }
@@ -503,7 +474,7 @@ func TestSelectIHaveRecipientsAdvancesSchedule(t *testing.T) {
 	m := newPartialUnitManager(t)
 	now := time.Now()
 	peers := map[peer.ID]peerState{peer.ID("g0"): {gossipPeer: true}}
-	m.selectIHaveRecipients(peers, now, 6)
+	m.selectIHaveRecipients(peers, now)
 	next, ok := m.peerNextGossipAt[peer.ID("g0")]
 	require.True(t, ok)
 	assert.Equal(t, now.Add(gossipInterval), next)
@@ -559,8 +530,8 @@ func TestPublishActionsGossipPeerWithPendingWantGetsData(t *testing.T) {
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 	// Seed pendingWant for the peer in this bucket.
 	ss := m.getSlotState("t0", 1)
-	b := ss.buckets["d"]
-	bps := newBucketPeerState(testCommitteeSize)
+	b := ss.attestationsMap["d"]
+	bps := newPeerAttestationState(testCommitteeSize)
 	bps.pendingWant.Set(0)
 	b.peers[peer.ID("p0")] = bps
 
@@ -595,9 +566,8 @@ func TestPublishActionsTwoBucketsBothEnveloped(t *testing.T) {
 	assert.True(t, seen["forkB"])
 }
 
-func TestPublishActionsIHaveCappedAtDegree(t *testing.T) {
+func TestPublishActionsIHaveSentToAllEligibleGossipPeers(t *testing.T) {
 	m := newPartialUnitManager(t)
-	m.node.IHaveGossipDegree = 6
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
 	peers := makePeers(10, true)
@@ -609,12 +579,11 @@ func TestPublishActionsIHaveCappedAtDegree(t *testing.T) {
 			availRecipients++
 		}
 	}
-	assert.Equal(t, 6, availRecipients, "must cap Available-envelope recipients at degree")
+	assert.Equal(t, 10, availRecipients, "every eligible gossip peer must receive an Available envelope")
 }
 
 func TestPublishActionsRateLimitedPeerSkippedForAvailable(t *testing.T) {
 	m := newPartialUnitManager(t)
-	m.node.IHaveGossipDegree = 6
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
 	peers := makePeers(2, true)
@@ -635,7 +604,6 @@ func TestPublishActionsRateLimitedPeerSkippedForAvailable(t *testing.T) {
 func TestPublishActionsRepeatedTicksRespectCooldown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := newPartialUnitManager(t)
-		m.node.IHaveGossipDegree = 6
 		m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
 		peers := makePeers(1, true)
@@ -671,8 +639,8 @@ func TestPublishActionsPendingWantClearedAfterTick(t *testing.T) {
 	m := newPartialUnitManager(t)
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 	ss := m.getSlotState("t0", 1)
-	b := ss.buckets["d"]
-	bps := newBucketPeerState(testCommitteeSize)
+	b := ss.attestationsMap["d"]
+	bps := newPeerAttestationState(testCommitteeSize)
 	bps.pendingWant.Set(99) // unsatisfiable
 	b.peers[peer.ID("p0")] = bps
 
@@ -741,7 +709,7 @@ func TestOnIncomingRPCAvailableMarksPeerGossipAndUpdatesAvailable(t *testing.T) 
 	assert.True(t, peers[pid].gossipPeer)
 	ss := m.getSlotState(topic, 1)
 	require.NotNil(t, ss)
-	b := ss.buckets["d"]
+	b := ss.attestationsMap["d"]
 	require.NotNil(t, b)
 	bps := b.peers[pid]
 	require.NotNil(t, bps)
@@ -769,7 +737,7 @@ func TestOnIncomingRPCRequestsUpdatesPendingWant(t *testing.T) {
 
 	assert.True(t, peers[pid].gossipPeer)
 	ss := m.getSlotState(topic, 1)
-	b := ss.buckets["d"]
+	b := ss.attestationsMap["d"]
 	bps := b.peers[pid]
 	assert.True(t, bps.pendingWant.Get(3))
 }
@@ -794,7 +762,7 @@ func TestOnIncomingRPCPartialMessageInfersAvailable(t *testing.T) {
 
 	ss := m.getSlotState(topic, 1)
 	require.NotNil(t, ss)
-	b := ss.buckets["d"]
+	b := ss.attestationsMap["d"]
 	require.NotNil(t, b)
 	m.mu.Lock()
 	_, has4 := b.attestations[4]
@@ -830,7 +798,7 @@ func TestOnIncomingRPCSubmitsToVerifier(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		ss := m.getSlotState(topic, 1)
-		b := ss.buckets["d"]
+		b := ss.attestationsMap["d"]
 		m.mu.Lock()
 		_, validated := b.validated[9]
 		_, validating := b.validating[9]
@@ -859,9 +827,9 @@ func TestOnIncomingRPCSeparatesBucketsAcrossForks(t *testing.T) {
 	require.NoError(t, m.onIncomingRPC(pid, peers, rpc))
 
 	ss := m.getSlotState(topic, 1)
-	require.Len(t, ss.buckets, 2, "forks must produce independent buckets")
-	bA := ss.buckets["forkA"]
-	bB := ss.buckets["forkB"]
+	require.Len(t, ss.attestationsMap, 2, "forks must produce independent buckets")
+	bA := ss.attestationsMap["forkA"]
+	bB := ss.attestationsMap["forkB"]
 	assert.Equal(t, "sA", string(bA.attestations[5].Signature))
 	assert.Equal(t, "sB", string(bB.attestations[5].Signature))
 }

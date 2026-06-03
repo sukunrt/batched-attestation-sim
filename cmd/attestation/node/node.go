@@ -77,7 +77,6 @@ type Node struct {
 	MaxPeersPerAttestation    int
 	DivergentAttestorFraction float64
 	PublishInterval           time.Duration
-	IHaveGossipDegree         int
 	// CommitteeSize is the wire-level capacity for attestor bitmaps. All
 	// committees share the same size (= num_attestors per topic).
 	CommitteeSize int
@@ -94,7 +93,7 @@ type Node struct {
 	verifier *batchVerifier
 	topics   []*pubsub.Topic
 	subs     []*pubsub.Subscription
-	partial  *partialAttesattionManager
+	partial  *partialAttestationManager
 }
 
 // Start brings the node up. ctx is used as the pubsub lifecycle context;
@@ -116,12 +115,8 @@ func (n *Node) Start(ctx context.Context) {
 		pubsub.WithMessageIdFn(MessageIDFunc),
 		pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign),
 		pubsub.WithNoAuthor(),
-		// DIAGNOSTIC: default is 32; bumped to test whether the size-32 per-peer
-		// outbound queue overflow is what drops ~45% of classic forwards.
+		// prysm defaults.
 		pubsub.WithPeerOutboundQueueSize(1000),
-		// Match Prysm's front validation queue (QueueSize default 600 in
-		// beacon-chain/p2p; libp2p default is only 32). Feeds the NumCPU
-		// validation workers; rarely binds but keeps us apples-to-apples.
 		pubsub.WithValidateQueueSize(600),
 	}
 	if n.RPCTracer != nil {
@@ -449,7 +444,7 @@ func (n *Node) selfPublish(slot int) {
 			"at", publishTime.UnixMilli(),
 		)
 		if n.Tracer != nil {
-			n.Tracer.OnPartialPublish(slot, m.TopicIndex, m.Position, digest)
+			n.Tracer.OnPartialPublish(slot, m.TopicIndex, m.Position, data)
 		}
 	}
 }

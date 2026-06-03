@@ -12,6 +12,14 @@ Shows:
     AttestationData once per bucket, so its bytes are mostly signatures + small
     control bitmaps.
 
+All numbers are scoped to the LAST slot only: per node we start counting at the
+`msg="starting slot" slot=<num_slots>` line and stop at the matching
+`msg="slot complete"` line, discarding everything emitted after the slot-ends
+line (the post-slot re-advertisement / drain tail). Latency records carry
+`slot=` and are additionally filtered to the last slot; bandwidth is the
+cumulative delta across the window. This avoids mixing slot-1 warmup and the
+trailing drain into the per-slot picture.
+
 Usage:
     uv run python analysis/prelim-analysis.py <dir> [--num-samples N]
 
@@ -71,6 +79,10 @@ PARTIAL_DATA_RECV_PAT = re.compile(
 IHAVE_RECV_PAT = re.compile(r'msg=topic_ihave_received\b.*?\bihave_size=(\d+)')
 IWANT_RECV_PAT = re.compile(r'msg=rpc_received\b.*?\biwant_size=(\d+)')
 PARTIAL_MD_RECV_PAT = re.compile(r'msg=partial_received\b.*?\bmetadata_bytes=(\d+)')
+# Slot lifecycle (node.go: n.logger.Info("starting slot"/"slot complete", "slot", N)).
+# slog text format quotes the message: msg="starting slot" ... slot=N.
+SLOT_START_PAT = re.compile(r'msg="starting slot".*?\bslot=(\d+)')
+SLOT_END_PAT = re.compile(r'msg="slot complete".*?\bslot=(\d+)')
 
 
 def load_topology(exp_dir: Path) -> dict:
@@ -83,17 +95,26 @@ def load_topology(exp_dir: Path) -> dict:
     return {"fanout": fanout, "super_mesh": super_mesh, "regular_mesh": regular_mesh}
 
 
-def parse_node_stderr(stderr_path: Path, parse_bw: bool = False):
-    """Return (received_records, bw_stats).
+def parse_node_stderr(stderr_path: Path, last_slot: int, parse_bw: bool = False):
+    """Return (received_records, bw_stats), scoped to the LAST slot only.
+
+    We stream the stderr in order and only accumulate between this node's
+    `msg="starting slot" slot=last_slot` line and its matching
+    `msg="slot complete"` line, breaking at that line so everything emitted
+    after the slot ends (the post-slot re-advertisement / drain tail) is
+    discarded. Latency records carry `slot=` and are additionally filtered to
+    `last_slot`. Bandwidth totals are the cumulative delta across the window
+    (value at slot end minus value at slot start), so they reflect bytes moved
+    during the last slot rather than the whole run.
 
     received_records: list of dicts with slot, committee, latency_ms.
-    bw_stats: dict with totals plus the received wire composition
+    bw_stats: dict with last-slot totals plus the received wire composition
               (att_data_recv / sig_recv / att_recv and the control counters), or
               None if parse_bw is False / no bandwidth lines seen.
     """
     records = []
-    sent_total = None
-    recv_total = None
+    sent_base = recv_base = None   # cumulative totals just before the last slot
+    sent_top = recv_top = None     # cumulative totals at/within the last slot
     peak_sent_bps = 0
     peak_recv_bps = 0
     att_data_recv = 0   # attestation_data bytes received (deduped per bucket in partial)
@@ -102,29 +123,52 @@ def parse_node_stderr(stderr_path: Path, parse_bw: bool = False):
     ihave_recv = 0
     iwant_recv = 0
     md_recv = 0
+    in_window = False
     with open(stderr_path) as f:
         for line in f:
+            sm = SLOT_START_PAT.search(line)
+            if sm:
+                if int(sm.group(1)) == last_slot:
+                    in_window = True
+                continue
+            em = SLOT_END_PAT.search(line)
+            if em:
+                if int(em.group(1)) == last_slot:
+                    break  # discard everything after the slot-ends line
+                continue
+            if not in_window:
+                # Before the last slot: keep the running cumulative bandwidth so
+                # we can subtract it off once the window starts.
+                if parse_bw:
+                    mb = BW_PAT.search(line)
+                    if mb:
+                        sent_base = int(mb.group(4))
+                        recv_base = int(mb.group(5))
+                continue
+            # ---- within the last-slot window ----
             m = RECEIVED_PAT.search(line)
             if m:
-                records.append({
-                    "slot": int(m.group(2)),
-                    "committee": int(m.group(3)),
-                    "latency_ms": int(m.group(4)),
-                })
+                if int(m.group(2)) == last_slot:
+                    records.append({
+                        "slot": int(m.group(2)),
+                        "committee": int(m.group(3)),
+                        "latency_ms": int(m.group(4)),
+                    })
                 continue
             m = PARTIAL_RECEIVED_PAT.search(line)
             if m:
-                records.append({
-                    "slot": int(m.group(1)),
-                    "committee": int(m.group(2)),
-                    "latency_ms": int(m.group(4)),
-                })
+                if int(m.group(1)) == last_slot:
+                    records.append({
+                        "slot": int(m.group(1)),
+                        "committee": int(m.group(2)),
+                        "latency_ms": int(m.group(4)),
+                    })
                 continue
             if parse_bw:
                 mb = BW_PAT.search(line)
                 if mb:
-                    sent_total = int(mb.group(4))
-                    recv_total = int(mb.group(5))
+                    sent_top = int(mb.group(4))
+                    recv_top = int(mb.group(5))
                     peak_sent_bps = max(peak_sent_bps, int(mb.group(2)))
                     peak_recv_bps = max(peak_recv_bps, int(mb.group(3)))
                     continue
@@ -153,10 +197,14 @@ def parse_node_stderr(stderr_path: Path, parse_bw: bool = False):
                     iwant_recv += int(gm.group(1))
                     continue
     bw = None
-    if sent_total is not None:
+    if parse_bw and (sent_top is not None or sent_base is not None):
+        base_s = sent_base or 0
+        base_r = recv_base or 0
+        top_s = sent_top if sent_top is not None else base_s
+        top_r = recv_top if recv_top is not None else base_r
         bw = {
-            "sent_total": sent_total,
-            "recv_total": recv_total,
+            "sent_total": max(0, top_s - base_s),
+            "recv_total": max(0, top_r - base_r),
             "peak_sent_bps": peak_sent_bps,
             "peak_recv_bps": peak_recv_bps,
             "att_data_recv": att_data_recv,
@@ -176,6 +224,7 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
 
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
     mode = "partial" if cfg["simulation"].get("use_partial_messages") else "classic"
+    last_slot = int(cfg["simulation"].get("num_slots", 1))
 
     # Decide which nodes to parse bandwidth for (spot check — avoid scanning all stderrs).
     rng = rng or random.Random(42)
@@ -194,7 +243,7 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
         sf = next(nd.glob("*.stderr"), None)
         if not sf:
             continue
-        recs, bw = parse_node_stderr(sf, parse_bw=(nn in bw_sample))
+        recs, bw = parse_node_stderr(sf, last_slot, parse_bw=(nn in bw_sample))
         if bw is not None:
             node_bw[nn] = bw
         if nn not in mesh_ids:
@@ -236,6 +285,7 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
     return {
         "mode": mode,
         "num_topics": int(cfg["simulation"].get("num_topics", 1)),
+        "last_slot": last_slot,
         "t95": arr,
         "super_bw": class_bw(super_sorted),
         "regular_bw": class_bw(reg_sorted),
@@ -320,7 +370,8 @@ def print_comparison(classic: dict, partial: dict):
         ["partial"] + [f"{v:.0f}" for v in p_vals],
         ["delta"]   + [pct_delta(c, p) for c, p in zip(c_vals, p_vals)],
     ]
-    print_table("Latency: time-to-receive-95% (ms)", headers, rows)
+    ls = classic.get("last_slot", partial.get("last_slot"))
+    print_table(f"Latency: time-to-receive-95% (ms) — last slot ({ls}) only", headers, rows)
 
     nt_c = classic["num_topics"]
     nt_p = partial["num_topics"]
@@ -341,7 +392,7 @@ def print_comparison(classic: dict, partial: dict):
         p_row = ["partial"] + [f"{pb[k]/nt_p/unit:.2f}" for _, k, unit in cols] + [f"{data_share(pb):.1f}%"]
         d_row = ["delta"]   + [pct_delta(cb[k]/nt_c, pb[k]/nt_p) for _, k, _ in cols] + [f"{data_share(pb) - data_share(cb):+.1f}pp"]
         print_table(
-            f"Received wire composition — {label} (mean per sampled mesh node, per topic; assumes equal usage across {nt_c} topics)",
+            f"Received wire composition — {label} (last slot ({ls}) only; mean per sampled mesh node, per topic; assumes equal usage across {nt_c} topics)",
             headers, [c_row, p_row, d_row],
         )
 

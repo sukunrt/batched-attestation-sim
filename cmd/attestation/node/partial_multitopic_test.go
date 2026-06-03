@@ -6,7 +6,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -99,7 +98,7 @@ func TestE2EMultiTopicPerTopicCommittees(t *testing.T) {
 				ss := rn.partial.getSlotState(topicName, 1)
 				require.NotNilf(t, ss, "node %d: missing slot state for topic %d", receiver, topic)
 				positions := map[int]struct{}{}
-				for _, b := range ss.buckets {
+				for _, b := range ss.attestationsMap {
 					for p := range b.validated {
 						positions[p] = struct{}{}
 					}
@@ -136,16 +135,16 @@ func TestE2EMultiTopicPerTopicCommittees(t *testing.T) {
 		// ceil(num_attestors/8) bytes — not committee_size * 256 or any
 		// global default.
 		wantBitmapBytes := (numAttestors + 7) / 8
-		b := newAttDataBucket([]byte("probe"))
+		b := newAttestationState([]byte("probe"))
 		b.validated[0] = struct{}{}
 		b.validated[3] = struct{}{}
-		md := buildBucketMetadata(b, peer.ID("p"), numAttestors, 1, true, nil)
+		md := getAttestationMetadata(b, numAttestors, 1, true, nil)
 		require.NotNil(t, md)
 		assert.Equalf(t, wantBitmapBytes, len(md.Available),
 			"available bitmap must be %d bytes for num_attestors=%d (was %d)",
 			wantBitmapBytes, numAttestors, len(md.Available))
 
-		req := buildBucketMetadata(b, peer.ID("p"), numAttestors, 2, false, []int{1, 2})
+		req := getAttestationMetadata(b, numAttestors, 2, false, []int{1, 2})
 		require.NotNil(t, req)
 		assert.Equalf(t, wantBitmapBytes, len(req.Requests),
 			"requests bitmap must be %d bytes for num_attestors=%d (was %d)",
@@ -159,4 +158,3 @@ func TestE2EMultiTopicPerTopicCommittees(t *testing.T) {
 			wantBitmapBytes*8, numNodes)
 	})
 }
-

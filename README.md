@@ -146,8 +146,7 @@ mode:
 disable_ihave_gossip: false
 ```
 
-Set `disable_ihave_gossip: true` only for a no-IHAVE variant. `ihave_gossip_degree: 0` uses the
-default degree of 6, matching GossipSub `Dlazy`.
+Set `disable_ihave_gossip: true` only for a no-IHAVE variant.
 
 ### Partial-mode log keys
 
@@ -167,7 +166,10 @@ Wire-level tracer lines (`topic_message_*`, `partial_*`) are attestation-aware (
 ## Analysis
 
 `analysis/prelim-analysis.py <dir>` prints a classic-vs-partial comparison (time-to-receive-95%
-latency and a received-bytes composition table) for a run or experiment directory.
+latency and a received-bytes composition table) for a run or experiment directory. All numbers are
+scoped to the last slot only: per node it counts between the `starting slot`/`slot complete` log
+lines for `num_slots` and discards everything after the slot-ends line, so the post-slot
+re-advertisement/drain tail and earlier-slot warmup don't skew the per-slot picture.
 
 ## Run Outputs
 

@@ -74,15 +74,14 @@ type partialEvent struct {
 	slot       int
 	topicIndex int
 	position   int
-	attDigest  [8]byte
 	latencyMs  int64
 }
 
 type testTracer struct {
-	mu              sync.Mutex
-	received        map[int][]receivedAtt // nodeNum -> classic-mode receives
-	partialPublishes []partialEvent       // partial-mode self-publishes
-	partialReceives  []partialEvent       // partial-mode receives
+	mu               sync.Mutex
+	received         map[int][]receivedAtt // nodeNum -> classic-mode receives
+	partialPublishes []partialEvent        // partial-mode self-publishes
+	partialReceives  []partialEvent        // partial-mode receives
 }
 
 func newTestTracer() *testTracer {
@@ -98,18 +97,18 @@ func (t *testTracer) OnReceive(nodeNum int, att *pb.Attestation, topicIndex int)
 	t.mu.Unlock()
 }
 
-func (t *testTracer) OnPartialPublish(slot, topicIndex, position int, attDigest [8]byte) {
+func (t *testTracer) OnPartialPublish(slot, topicIndex, position int, attData []byte) {
 	t.mu.Lock()
 	t.partialPublishes = append(t.partialPublishes, partialEvent{
-		slot: slot, topicIndex: topicIndex, position: position, attDigest: attDigest,
+		slot: slot, topicIndex: topicIndex, position: position,
 	})
 	t.mu.Unlock()
 }
 
-func (t *testTracer) OnPartialReceive(slot, topicIndex, position int, attDigest [8]byte, latencyMs int64) {
+func (t *testTracer) OnPartialReceive(slot, topicIndex, position int, attData []byte, latencyMs int64) {
 	t.mu.Lock()
 	t.partialReceives = append(t.partialReceives, partialEvent{
-		slot: slot, topicIndex: topicIndex, position: position, attDigest: attDigest, latencyMs: latencyMs,
+		slot: slot, topicIndex: topicIndex, position: position, latencyMs: latencyMs,
 	})
 	t.mu.Unlock()
 }
@@ -322,10 +321,10 @@ func TestFanoutPublisher(t *testing.T) {
 				AttestationDataSize:  64,
 				SignatureSize:        36,
 				Fanout:               true,
-				GossipsubParams:     testGossipsubParams,
-				VerificationDelay:   testVerificationDelay,
-				Network:             nw,
-				Tracer:              tr,
+				GossipsubParams:      testGossipsubParams,
+				VerificationDelay:    testVerificationDelay,
+				Network:              nw,
+				Tracer:               tr,
 			},
 			{
 				Num:                 1,
@@ -558,7 +557,7 @@ func TestMultiTopic(t *testing.T) {
 			senderNode := 1 - receiverNode
 			senderSlot := int32(senderNode + 1) // node 0 publishes slot 1, node 1 publishes slot 2
 
-			for topic := 0; topic < numTopics; topic++ {
+			for topic := range numTopics {
 				found := false
 				for _, r := range got {
 					if r.att.NodeNum == int32(senderNode) && r.att.SlotNum == senderSlot && r.topicIndex == topic {

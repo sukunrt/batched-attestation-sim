@@ -1,6 +1,6 @@
 module github.com/ethp2p/simlab/cmd/attestation
 
-go 1.25.4
+go 1.26
 
 require (
 	github.com/gogo/protobuf v1.3.2

@@ -38,4 +38,3 @@ simulation:
   divergent_attestor_fraction: 0.01
   validation_batch_window_ms: 10
   per_attestation_validation_us: 100
-  ihave_gossip_degree: 0

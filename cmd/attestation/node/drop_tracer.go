@@ -38,6 +38,10 @@ type DropTracer struct {
 	dropPartialRPC  atomic.Int64
 	dropControlRPC  atomic.Int64
 
+	// set once any RPC has been dropped; gates the drop_summary log so we
+	// only emit when there is an actual drop to report.
+	dropped atomic.Bool
+
 	// receive side, for context
 	recvPublishMsgs atomic.Int64
 	recvPartialRPC  atomic.Int64
@@ -78,6 +82,10 @@ func (t *DropTracer) start(ctx context.Context) {
 }
 
 func (t *DropTracer) flush() {
+	if !t.dropped.Load() {
+		return
+	}
+
 	t.mu.Lock()
 	rejThrottle := t.rejectByRsn[pubsub.RejectValidationThrottled]
 	rejQueueFull := t.rejectByRsn[pubsub.RejectValidationQueueFull]
@@ -123,6 +131,7 @@ func (t *DropTracer) SendRPC(rpc *pubsub.RPC, p peer.ID) {
 }
 
 func (t *DropTracer) DropRPC(rpc *pubsub.RPC, p peer.ID) {
+	t.dropped.Store(true)
 	nPub, isPartial := classifyRPC(rpc)
 	switch {
 	case nPub > 0:

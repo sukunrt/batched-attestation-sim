@@ -98,7 +98,6 @@ func main() {
 		PublishInterval:            sim.PublishInterval(),
 		VerificationBatchWindow:    sim.ValidationBatchWindow(),
 		PerAttestationVerification: sim.PerAttestationValidation(),
-		IHaveGossipDegree:          sim.EffectiveIHaveGossipDegree(),
 		CommitteeSize:              sim.NumAttestors,
 		PublishStart:               publishStart,
 		SlotDuration:               sim.SlotDuration(),

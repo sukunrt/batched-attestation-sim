@@ -30,7 +30,6 @@ type e2eOpts struct {
 	maxPerAttestation         int                  // default 16
 	publishInterval           time.Duration        // default 20ms
 	disableIHave              bool                 // default false
-	iHaveDegree               int                  // default 6
 	numAttestors              int                  // total network size for context
 	publishStart              time.Time            // shared across all nodes in a run
 	slotDuration              time.Duration        // shared across all nodes in a run
@@ -50,7 +49,6 @@ func defaultE2EOpts(num, publishSlot int, publishStart time.Time, slotDuration t
 		gossipsubParams:   testGossipsubParams,
 		maxPerAttestation: 16,
 		publishInterval:   20 * time.Millisecond,
-		iHaveDegree:       6,
 		numAttestors:      numAttestors,
 		publishStart:      publishStart,
 		slotDuration:      slotDuration,
@@ -75,7 +73,7 @@ func newE2EPartialNode(opts e2eOpts, nw *testNetwork, tr *testTracer) *Node {
 		if opts.fanout {
 			memberships = []TopicMembership{{TopicIndex: opts.fanoutTopicIndex, Position: opts.num}}
 		} else {
-			for i := 0; i < opts.numTopics; i++ {
+			for i := range opts.numTopics {
 				memberships = append(memberships, TopicMembership{TopicIndex: i, Position: opts.num})
 			}
 		}
@@ -98,7 +96,6 @@ func newE2EPartialNode(opts e2eOpts, nw *testNetwork, tr *testTracer) *Node {
 		DivergentAttestorFraction: opts.divergentAttestorFraction,
 		PublishInterval:           opts.publishInterval,
 		VerificationBatchWindow:   2 * time.Millisecond,
-		IHaveGossipDegree:         opts.iHaveDegree,
 		DisableIHaveGossip:        opts.disableIHave,
 		CommitteeSize:             opts.committeeSize,
 		PublishStart:              opts.publishStart,
@@ -213,7 +210,7 @@ func expectAttestation(t *testing.T, n *Node, topic string, slot, from int) bool
 	}
 	n.partial.mu.Lock()
 	defer n.partial.mu.Unlock()
-	for _, b := range ss.buckets {
+	for _, b := range ss.attestationsMap {
 		if _, ok := b.validated[from]; ok {
 			return true
 		}
@@ -236,7 +233,7 @@ func expectAttestationInBucket(t *testing.T, n *Node, topic string, slot, from i
 	}
 	n.partial.mu.Lock()
 	defer n.partial.mu.Unlock()
-	b, ok := ss.buckets[string(data)]
+	b, ok := ss.attestationsMap[string(data)]
 	if !ok {
 		t.Errorf("node %d: missing bucket for slot %d", n.Num, slot)
 		return false
@@ -300,7 +297,7 @@ func TestE2EChainPropagationAllToAll(t *testing.T) {
 		publishStart := time.Now().Add(4 * time.Second)
 
 		nodes := make([]*Node, numNodes)
-		for i := 0; i < numNodes; i++ {
+		for i := range numNodes {
 			nodes[i] = newE2EPartialNode(defaultE2EOpts(i, 1, publishStart, slotDuration, numNodes), nw, tr)
 		}
 
@@ -310,7 +307,7 @@ func TestE2EChainPropagationAllToAll(t *testing.T) {
 
 		topic := topicName(0)
 		for i, n := range nodes {
-			for j := 0; j < numNodes; j++ {
+			for j := range numNodes {
 				if i == j {
 					continue
 				}
@@ -343,7 +340,7 @@ func TestE2EGossipPathDeliversToNonMeshPeer(t *testing.T) {
 		tightMesh := GossipsubParams{D: 4, Dlow: 4, Dhigh: 5} // Dhigh must be >= Dscore (4)
 
 		nodes := make([]*Node, numNodes)
-		for i := 0; i < numNodes; i++ {
+		for i := range numNodes {
 			opts := defaultE2EOpts(i, 1, publishStart, slotDuration, numNodes)
 			opts.gossipsubParams = tightMesh
 			opts.publishInterval = 50 * time.Millisecond
@@ -353,9 +350,9 @@ func TestE2EGossipPathDeliversToNonMeshPeer(t *testing.T) {
 		// Full mesh of connections — but gossipsub keeps only D peers in
 		// each topic's mesh, so the rest become gossip peers.
 		conn := map[int][]int{}
-		for i := 0; i < numNodes; i++ {
+		for i := range numNodes {
 			peers := make([]int, 0, numNodes-1)
-			for j := 0; j < numNodes; j++ {
+			for j := range numNodes {
 				if j != i {
 					peers = append(peers, j)
 				}
@@ -367,7 +364,7 @@ func TestE2EGossipPathDeliversToNonMeshPeer(t *testing.T) {
 
 		topic := topicName(0)
 		for i, n := range nodes {
-			for j := 0; j < numNodes; j++ {
+			for j := range numNodes {
 				if i == j {
 					continue
 				}
@@ -396,7 +393,7 @@ func TestE2EPropagationWithoutIHaveGossip(t *testing.T) {
 		publishStart := time.Now().Add(4 * time.Second)
 
 		nodes := make([]*Node, numNodes)
-		for i := 0; i < numNodes; i++ {
+		for i := range numNodes {
 			opts := defaultE2EOpts(i, 1, publishStart, slotDuration, numNodes)
 			opts.disableIHave = true
 			nodes[i] = newE2EPartialNode(opts, nw, tr)
@@ -405,9 +402,9 @@ func TestE2EPropagationWithoutIHaveGossip(t *testing.T) {
 		// Full mesh — with the default D=8, every connected peer is a
 		// mesh peer, so the push path is sufficient.
 		conn := map[int][]int{}
-		for i := 0; i < numNodes; i++ {
+		for i := range numNodes {
 			peers := make([]int, 0, numNodes-1)
-			for j := 0; j < numNodes; j++ {
+			for j := range numNodes {
 				if j != i {
 					peers = append(peers, j)
 				}
@@ -419,7 +416,7 @@ func TestE2EPropagationWithoutIHaveGossip(t *testing.T) {
 
 		topic := topicName(0)
 		for i, n := range nodes {
-			for j := 0; j < numNodes; j++ {
+			for j := range numNodes {
 				if i == j {
 					continue
 				}
@@ -500,7 +497,7 @@ func TestE2EMultiTopicIndependentState(t *testing.T) {
 		runE2E(t, ctx, nodes, map[int][]int{0: {1}}, publishStart, numSlots, slotDuration)
 
 		// Each node should observe the other's attestation on every topic.
-		for i := 0; i < numTopics; i++ {
+		for i := range numTopics {
 			topic := topicName(i)
 			assert.True(t, expectAttestation(t, nodes[0], topic, 2, 1), "topic=%s", topic)
 			assert.True(t, expectAttestation(t, nodes[1], topic, 1, 0), "topic=%s", topic)
@@ -534,7 +531,7 @@ func TestE2EPartsMetadataObservedOnWire(t *testing.T) {
 		tracers := make([]*countingRPCTracer, numNodes)
 		nodes := make([]*Node, numNodes)
 
-		for i := 0; i < numNodes; i++ {
+		for i := range numNodes {
 			tracers[i] = &countingRPCTracer{}
 			opts := defaultE2EOpts(i, 1, publishStart, slotDuration, numNodes)
 			opts.gossipsubParams = tightMesh
@@ -546,9 +543,9 @@ func TestE2EPartsMetadataObservedOnWire(t *testing.T) {
 		// Full mesh of TCP-level connections; gossipsub keeps D of them as
 		// mesh peers and treats the rest as gossip peers per topic.
 		conn := map[int][]int{}
-		for i := 0; i < numNodes; i++ {
+		for i := range numNodes {
 			peers := make([]int, 0, numNodes-1)
-			for j := 0; j < numNodes; j++ {
+			for j := range numNodes {
 				if j != i {
 					peers = append(peers, j)
 				}
@@ -616,7 +613,7 @@ func TestE2EForkBucketsCoexist(t *testing.T) {
 		for _, n := range nodes {
 			n.partial.mu.Lock()
 			ss := n.partial.getSlotState(topic, 1)
-			if ss != nil && len(ss.buckets) >= 2 {
+			if ss != nil && len(ss.attestationsMap) >= 2 {
 				multiBucketNodes++
 			}
 			n.partial.mu.Unlock()
@@ -632,7 +629,7 @@ func TestE2EForkBucketsCoexist(t *testing.T) {
 			ss := n.partial.getSlotState(topic, 1)
 			if ss != nil {
 				positions := map[int]struct{}{}
-				for _, b := range ss.buckets {
+				for _, b := range ss.attestationsMap {
 					for p := range b.validated {
 						positions[p] = struct{}{}
 					}

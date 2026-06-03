@@ -133,7 +133,24 @@ func partialMetaStats(blob []byte) (mdCount, availOnes, reqOnes int) {
 	return mdCount, availOnes, reqOnes
 }
 
+// OnRPCSent dispatches an outgoing RPC to the classic-gossipsub and
+// partial-message loggers. The two cover disjoint parts of the RPC (publishes
+// vs the partial extension payload), so both run unconditionally regardless of
+// the node's mode.
 func (t *RPCTracer) OnRPCSent(
+	peerID peer.ID,
+	duration time.Duration,
+	rpc *pb.RPC,
+) {
+	t.onClassicRPCSent(peerID, duration, rpc)
+	t.onPartialRPCSent(peerID, duration, rpc)
+}
+
+// onClassicRPCSent logs the classic-gossipsub portion of an outgoing RPC: the
+// rpc_sent summary, IHAVE/IWANT control, GRAFT/PRUNE control, and full
+// topic_message_sent publishes. IHAVE/IWANT gossip is shared with
+// partial-message mode, so this runs for every RPC.
+func (t *RPCTracer) onClassicRPCSent(
 	peerID peer.ID,
 	duration time.Duration,
 	rpc *pb.RPC,
@@ -171,7 +188,7 @@ func (t *RPCTracer) OnRPCSent(
 		}
 	}
 	t.logger.Info("rpc_sent",
-		"peerID", peerID.ShortString(),
+		"peer", shortPeer(peerID),
 		"total_size", proto.Size(rpc),
 		"iwant_count", iWantCount,
 		"iwant_size", iWantSize,
@@ -179,7 +196,7 @@ func (t *RPCTracer) OnRPCSent(
 	)
 	for topic, s := range topicIHaves {
 		t.logger.Info("topic_ihave_sent",
-			"peerID", peerID.ShortString(),
+			"peer", shortPeer(peerID),
 			"topic", topic,
 			"ihave_count", s.count,
 			"ihave_size", s.size,
@@ -190,13 +207,13 @@ func (t *RPCTracer) OnRPCSent(
 	if rpc.GetControl() != nil {
 		for _, graft := range rpc.GetControl().GetGraft() {
 			t.logger.Info("graft_sent",
-				"peerID", peerID.ShortString(),
+				"peer", shortPeer(peerID),
 				"topic", graft.GetTopicID(),
 			)
 		}
 		for _, prune := range rpc.GetControl().GetPrune() {
 			t.logger.Info("prune_sent",
-				"peerID", peerID.ShortString(),
+				"peer", shortPeer(peerID),
 				"topic", prune.GetTopicID(),
 			)
 		}
@@ -214,33 +231,61 @@ func (t *RPCTracer) OnRPCSent(
 			"att_data_bytes", attDataBytes,
 			"sig_bytes", sigBytes,
 			"att_digest", digest,
-			"peerID", peerID.ShortString(),
+			"peer", shortPeer(peerID),
 			"topic", msg.GetTopic(),
-			"took", duration.Milliseconds(),
-		)
-	}
-
-	if partial := rpc.GetPartial(); partial != nil {
-		dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
-		metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
-		t.logger.Info("partial_sent",
-			"peerID", peerID.ShortString(),
-			"topic", partial.GetTopicID(),
-			"partial_bytes", len(partial.GetPartialMessage()),
-			"metadata_bytes", len(partial.GetPartsMetadata()),
-			"data_batches", dataBatches,
-			"att_count", attCount,
-			"att_data_bytes", attDataBytes,
-			"sig_bytes", sigBytes,
-			"meta_count", metaCount,
-			"available_ones", availOnes,
-			"requests_ones", reqOnes,
 			"took", duration.Milliseconds(),
 		)
 	}
 }
 
+// onPartialRPCSent logs the partial-message extension payload of an outgoing
+// RPC (the partial_sent line). It is a no-op for classic-mode RPCs, which carry
+// no partial payload.
+func (t *RPCTracer) onPartialRPCSent(
+	peerID peer.ID,
+	duration time.Duration,
+	rpc *pb.RPC,
+) {
+	partial := rpc.GetPartial()
+	if partial == nil {
+		return
+	}
+	dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
+	metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
+	t.logger.Info("partial_sent",
+		"peer", shortPeer(peerID),
+		"topic", partial.GetTopicID(),
+		"partial_bytes", len(partial.GetPartialMessage()),
+		"metadata_bytes", len(partial.GetPartsMetadata()),
+		"data_batches", dataBatches,
+		"att_count", attCount,
+		"att_data_bytes", attDataBytes,
+		"sig_bytes", sigBytes,
+		"meta_count", metaCount,
+		"available_ones", availOnes,
+		"requests_ones", reqOnes,
+		"took", duration.Milliseconds(),
+	)
+}
+
+// OnRPCReceived dispatches an incoming RPC to the classic-gossipsub and
+// partial-message loggers. The two cover disjoint parts of the RPC (publishes
+// vs the partial extension payload), so both run unconditionally regardless of
+// the node's mode.
 func (t *RPCTracer) OnRPCReceived(
+	peerID peer.ID,
+	duration time.Duration,
+	rpc *pb.RPC,
+) {
+	t.onClassicRPCReceived(peerID, duration, rpc)
+	t.onPartialRPCReceived(peerID, duration, rpc)
+}
+
+// onClassicRPCReceived logs the classic-gossipsub portion of an incoming RPC:
+// the rpc_received summary, IHAVE/IWANT control, GRAFT/PRUNE control, and full
+// topic_message_received publishes. IHAVE/IWANT gossip is shared with
+// partial-message mode, so this runs for every RPC.
+func (t *RPCTracer) onClassicRPCReceived(
 	peerID peer.ID,
 	duration time.Duration,
 	rpc *pb.RPC,
@@ -278,7 +323,7 @@ func (t *RPCTracer) OnRPCReceived(
 		}
 	}
 	t.logger.Info("rpc_received",
-		"peerID", peerID.ShortString(),
+		"peer", shortPeer(peerID),
 		"total_size", proto.Size(rpc),
 		"iwant_count", iWantCount,
 		"iwant_size", iWantSize,
@@ -286,7 +331,7 @@ func (t *RPCTracer) OnRPCReceived(
 	)
 	for topic, s := range topicIHaves {
 		t.logger.Info("topic_ihave_received",
-			"peerID", peerID.ShortString(),
+			"peer", shortPeer(peerID),
 			"topic", topic,
 			"ihave_count", s.count,
 			"ihave_size", s.size,
@@ -297,13 +342,13 @@ func (t *RPCTracer) OnRPCReceived(
 	if rpc.GetControl() != nil {
 		for _, graft := range rpc.GetControl().GetGraft() {
 			t.logger.Info("graft_received",
-				"peerID", peerID.ShortString(),
+				"peer", shortPeer(peerID),
 				"topic", graft.GetTopicID(),
 			)
 		}
 		for _, prune := range rpc.GetControl().GetPrune() {
 			t.logger.Info("prune_received",
-				"peerID", peerID.ShortString(),
+				"peer", shortPeer(peerID),
 				"topic", prune.GetTopicID(),
 			)
 		}
@@ -321,35 +366,46 @@ func (t *RPCTracer) OnRPCReceived(
 			"att_data_bytes", attDataBytes,
 			"sig_bytes", sigBytes,
 			"att_digest", digest,
-			"peerID", peerID.ShortString(),
+			"peer", shortPeer(peerID),
 			"topic", msg.GetTopic(),
-			"took", duration.Milliseconds(),
-		)
-	}
-
-	if partial := rpc.GetPartial(); partial != nil {
-		dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
-		metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
-		t.logger.Info("partial_received",
-			"peerID", peerID.ShortString(),
-			"topic", partial.GetTopicID(),
-			"partial_bytes", len(partial.GetPartialMessage()),
-			"metadata_bytes", len(partial.GetPartsMetadata()),
-			"data_batches", dataBatches,
-			"att_count", attCount,
-			"att_data_bytes", attDataBytes,
-			"sig_bytes", sigBytes,
-			"meta_count", metaCount,
-			"available_ones", availOnes,
-			"requests_ones", reqOnes,
 			"took", duration.Milliseconds(),
 		)
 	}
 }
 
+// onPartialRPCReceived logs the partial-message extension payload of an incoming
+// RPC (the partial_received line). It is a no-op for classic-mode RPCs, which
+// carry no partial payload.
+func (t *RPCTracer) onPartialRPCReceived(
+	peerID peer.ID,
+	duration time.Duration,
+	rpc *pb.RPC,
+) {
+	partial := rpc.GetPartial()
+	if partial == nil {
+		return
+	}
+	dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
+	metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
+	t.logger.Info("partial_received",
+		"peer", shortPeer(peerID),
+		"topic", partial.GetTopicID(),
+		"partial_bytes", len(partial.GetPartialMessage()),
+		"metadata_bytes", len(partial.GetPartsMetadata()),
+		"data_batches", dataBatches,
+		"att_count", attCount,
+		"att_data_bytes", attDataBytes,
+		"sig_bytes", sigBytes,
+		"meta_count", metaCount,
+		"available_ones", availOnes,
+		"requests_ones", reqOnes,
+		"took", duration.Milliseconds(),
+	)
+}
+
 func (t *RPCTracer) OnPeerRTT(peerID peer.ID, topic string, rtt time.Duration, transport string, remoteAddr string) {
 	t.logger.Info("mesh_peer_rtt",
-		"peerID", peerID.ShortString(),
+		"peer", shortPeer(peerID),
 		"topic", topic,
 		"smoothedRTT_ms", rtt.Milliseconds(),
 		"transport", transport,
