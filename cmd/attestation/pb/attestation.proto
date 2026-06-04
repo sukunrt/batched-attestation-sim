@@ -8,11 +8,11 @@ option go_package = "github.com/ethp2p/simlab/cmd/attestation/pb";
 message Attestation {
   int32 node_num = 1;
   int32 slot_num = 2;
-  int64 publish_at_unix_ms = 3;
   bytes data = 4;
-  int64 expected_publish_at_unix_ms = 5;
   int32 msg_index = 6;
   bytes signature = 7;
+  reserved 3, 5;
+  reserved "publish_at_unix_ms", "expected_publish_at_unix_ms";
 }
 
 // BatchedAttestation carries attestations from multiple committee members

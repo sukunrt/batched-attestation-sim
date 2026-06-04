@@ -265,7 +265,8 @@ func (n *Node) runReceiverClassic(ctx context.Context, sub *pubsub.Subscription,
 			n.logger.Error("unmarshal failed", "err", err)
 			continue
 		}
-		n.Tracer.OnReceive(n.Num, &att, topicIndex)
+		latencyMs := time.Since(n.slotStartTime(int(att.SlotNum))).Milliseconds()
+		n.Tracer.OnReceive(n.Num, &att, topicIndex, latencyMs)
 	}
 }
 
@@ -279,7 +280,6 @@ func (n *Node) runPublisherClassic(ctx context.Context, numSlots int, slotDurati
 			return
 		}
 
-		expectedPublishAt := time.Now()
 		if n.PublishDelay != nil {
 			if delay := n.PublishDelay(); delay > 0 {
 				time.Sleep(delay)
@@ -291,7 +291,7 @@ func (n *Node) runPublisherClassic(ctx context.Context, numSlots int, slotDurati
 				data := n.attestationDataForSlot(slot, topic.String())
 				sig := make([]byte, n.SignatureSize)
 				crand.Read(sig)
-				att := n.attestationDataForSlotClassic(slot, data, sig, msgIdx, expectedPublishAt)
+				att := n.attestationDataForSlotClassic(slot, data, sig, msgIdx)
 				buf, err := proto.Marshal(att)
 				if err != nil {
 					n.logger.Error("marshal failed", "slot", slot, "msg_index", msgIdx, "err", err)
@@ -319,22 +319,20 @@ func (n *Node) runPublisherClassic(ctx context.Context, numSlots int, slotDurati
 
 }
 
-func (n *Node) attestationDataForSlotClassic(
-	slot int,
-	data []byte,
-	sig []byte,
-	msgIdx int,
-	expectedPublishAt time.Time,
-) *pb.Attestation {
+func (n *Node) attestationDataForSlotClassic(slot int, data, sig []byte, msgIdx int) *pb.Attestation {
 	return &pb.Attestation{
-		NodeNum:                 int32(n.Num),
-		Data:                    data,
-		Signature:               sig,
-		SlotNum:                 int32(slot),
-		MsgIndex:                int32(msgIdx),
-		PublishAtUnixMs:         time.Now().UnixMilli(),
-		ExpectedPublishAtUnixMs: expectedPublishAt.UnixMilli(),
+		NodeNum:   int32(n.Num),
+		Data:      data,
+		Signature: sig,
+		SlotNum:   int32(slot),
+		MsgIndex:  int32(msgIdx),
 	}
+}
+
+// slotStartTime is the nominal wall-clock start of a slot — the reference point
+// for time-to-receive, matching partial.go's slotStartTime.
+func (n *Node) slotStartTime(slot int) time.Time {
+	return n.PublishStart.Add(time.Duration(slot-1) * n.SlotDuration)
 }
 
 func (n *Node) runClassic(numSlots int, slotDuration time.Duration) {

@@ -90,7 +90,7 @@ func newTestTracer() *testTracer {
 
 func (t *testTracer) OnPublish(att *pb.Attestation, topicIndex int) {}
 
-func (t *testTracer) OnReceive(nodeNum int, att *pb.Attestation, topicIndex int) {
+func (t *testTracer) OnReceive(nodeNum int, att *pb.Attestation, topicIndex int, latencyMs int64) {
 	clone := proto.Clone(att).(*pb.Attestation)
 	t.mu.Lock()
 	t.received[nodeNum] = append(t.received[nodeNum], receivedAtt{att: clone, topicIndex: topicIndex})

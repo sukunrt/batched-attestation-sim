@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
-	"time"
 
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
 )
@@ -19,7 +18,7 @@ import (
 // → receive → validate pipeline.
 type Tracer interface {
 	OnPublish(att *pb.Attestation, topicIndex int)
-	OnReceive(nodeNum int, att *pb.Attestation, topicIndex int)
+	OnReceive(nodeNum int, att *pb.Attestation, topicIndex int, latencyMs int64)
 
 	// OnPartialPublish is called when this node self-publishes an
 	// attestation in partial-messages mode. position is the committee
@@ -47,9 +46,8 @@ func (s *SlogTracer) OnPublish(att *pb.Attestation, topicIndex int) {
 	s.logger.Info("published", "slot", att.SlotNum, "committee_index", topicIndex, "msg_index", att.MsgIndex)
 }
 
-func (s *SlogTracer) OnReceive(nodeNum int, att *pb.Attestation, topicIndex int) {
-	latency := time.Now().UnixMilli() - att.ExpectedPublishAtUnixMs
-	s.logger.Info("received", "from", att.NodeNum, "slot", att.SlotNum, "committee_index", topicIndex, "msg_index", att.MsgIndex, "latency_ms", latency)
+func (s *SlogTracer) OnReceive(nodeNum int, att *pb.Attestation, topicIndex int, latencyMs int64) {
+	s.logger.Info("received", "from", att.NodeNum, "slot", att.SlotNum, "committee_index", topicIndex, "msg_index", att.MsgIndex, "latency_ms", latencyMs)
 }
 
 func (s *SlogTracer) OnPartialPublish(slot, topicIndex, position int, attData []byte) {

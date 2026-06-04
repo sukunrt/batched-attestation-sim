@@ -23,16 +23,14 @@ const (
 
 // Attestation is the classic-mode message: one attestation per Publish.
 type Attestation struct {
-	state                   protoimpl.MessageState `protogen:"open.v1"`
-	NodeNum                 int32                  `protobuf:"varint,1,opt,name=node_num,json=nodeNum,proto3" json:"node_num,omitempty"`
-	SlotNum                 int32                  `protobuf:"varint,2,opt,name=slot_num,json=slotNum,proto3" json:"slot_num,omitempty"`
-	PublishAtUnixMs         int64                  `protobuf:"varint,3,opt,name=publish_at_unix_ms,json=publishAtUnixMs,proto3" json:"publish_at_unix_ms,omitempty"`
-	Data                    []byte                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
-	ExpectedPublishAtUnixMs int64                  `protobuf:"varint,5,opt,name=expected_publish_at_unix_ms,json=expectedPublishAtUnixMs,proto3" json:"expected_publish_at_unix_ms,omitempty"`
-	MsgIndex                int32                  `protobuf:"varint,6,opt,name=msg_index,json=msgIndex,proto3" json:"msg_index,omitempty"`
-	Signature               []byte                 `protobuf:"bytes,7,opt,name=signature,proto3" json:"signature,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeNum       int32                  `protobuf:"varint,1,opt,name=node_num,json=nodeNum,proto3" json:"node_num,omitempty"`
+	SlotNum       int32                  `protobuf:"varint,2,opt,name=slot_num,json=slotNum,proto3" json:"slot_num,omitempty"`
+	Data          []byte                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
+	MsgIndex      int32                  `protobuf:"varint,6,opt,name=msg_index,json=msgIndex,proto3" json:"msg_index,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,7,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Attestation) Reset() {
@@ -79,25 +77,11 @@ func (x *Attestation) GetSlotNum() int32 {
 	return 0
 }
 
-func (x *Attestation) GetPublishAtUnixMs() int64 {
-	if x != nil {
-		return x.PublishAtUnixMs
-	}
-	return 0
-}
-
 func (x *Attestation) GetData() []byte {
 	if x != nil {
 		return x.Data
 	}
 	return nil
-}
-
-func (x *Attestation) GetExpectedPublishAtUnixMs() int64 {
-	if x != nil {
-		return x.ExpectedPublishAtUnixMs
-	}
-	return 0
 }
 
 func (x *Attestation) GetMsgIndex() int32 {
@@ -353,15 +337,13 @@ var File_attestation_proto protoreflect.FileDescriptor
 
 const file_attestation_proto_rawDesc = "" +
 	"\n" +
-	"\x11attestation.proto\x12\vattestation\"\xfd\x01\n" +
+	"\x11attestation.proto\x12\vattestation\"\xcf\x01\n" +
 	"\vAttestation\x12\x19\n" +
 	"\bnode_num\x18\x01 \x01(\x05R\anodeNum\x12\x19\n" +
-	"\bslot_num\x18\x02 \x01(\x05R\aslotNum\x12+\n" +
-	"\x12publish_at_unix_ms\x18\x03 \x01(\x03R\x0fpublishAtUnixMs\x12\x12\n" +
-	"\x04data\x18\x04 \x01(\fR\x04data\x12<\n" +
-	"\x1bexpected_publish_at_unix_ms\x18\x05 \x01(\x03R\x17expectedPublishAtUnixMs\x12\x1b\n" +
+	"\bslot_num\x18\x02 \x01(\x05R\aslotNum\x12\x12\n" +
+	"\x04data\x18\x04 \x01(\fR\x04data\x12\x1b\n" +
 	"\tmsg_index\x18\x06 \x01(\x05R\bmsgIndex\x12\x1c\n" +
-	"\tsignature\x18\a \x01(\fR\tsignature\"\x8a\x01\n" +
+	"\tsignature\x18\a \x01(\fR\tsignatureJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06R\x12publish_at_unix_msR\x1bexpected_publish_at_unix_ms\"\x8a\x01\n" +
 	"\x12BatchedAttestation\x12)\n" +
 	"\x10attestation_data\x18\x01 \x01(\fR\x0fattestationData\x12)\n" +
 	"\x10attestor_indices\x18\x02 \x03(\rR\x0fattestorIndices\x12\x1e\n" +
