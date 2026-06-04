@@ -109,35 +109,11 @@ Enable partial-message mode with:
 use_partial_messages: true
 ```
 
-In partial-message mode, the simulator installs libp2p's partial-messages extension, joins topics
-with partial-message requests, and batches attestations by shared attestation data. The wire
-format follows the `draft-committee-attestation` spec:
-
-- `BatchedAttestation { attestation_data, attestor_indices (bitmap[num_attestors]), signatures[] }`
-- `CommitteeAttestationPartsMetadata { slot, attestation_data, available, requests }`
-- Each PublishAction carries a `ControlEnvelope` (per-bucket metadata list) and a
-  `BatchedAttestationEnvelope` (per-bucket batch list).
-
-Each topic has a fixed committee of `num_attestors` members chosen once at sim build:
-`fanout_nodes_per_topic` fanout nodes assigned to that topic (positions `[0, fnpt)`) plus
-`num_attestors - fnpt` mesh nodes drawn from the global mesh pool (positions
-`[fnpt, num_attestors)`). Committee membership is written to `schedule.json` as
-`committee_membership: {topic_id: [node_nums…]}` and passed to each Go process via the
-`-committee-memberships=t0:p0;t1:p1` CLI flag. Position is the index into the per-topic
-committee list; node identity is decoupled from committee position.
-
-`attestor_indices`, `available`, and `requests` are fixed-width bitmaps of length
-`num_attestors` bits (`ceil(num_attestors / 8)` bytes). Bit `i` set means the committee member
-at position `i` is involved.
-
-State is keyed per `(topic, slot, attestation_data)` bucket — forks coexist as independent
-buckets so two divergent attestation data variants at the same slot do not get deduplicated by
-committee position.
-
-Verification goes through the same per-node batch verifier as classic mode — both modes enqueue
-items, sleep once per batch, and confirm via callback — only the entry point differs (classic
-blocks inside the topic validator; partial fires-and-forgets from the RPC handler and promotes
-attestations to validated state in the callback).
+In partial-message mode the simulator uses libp2p's partial-messages extension to batch
+attestations that share the same attestation data, following the `draft-committee-attestation`
+spec. Each topic is a fixed committee of `num_attestors` members, chosen once when the simulation
+is built: the topic's `fanout_nodes_per_topic` fanout nodes plus enough mesh nodes to reach
+`num_attestors`.
 
 Classic GossipSub IHAVE/IWANT gossip remains enabled by default, including in partial-message
 mode:
@@ -148,28 +124,14 @@ disable_ihave_gossip: false
 
 Set `disable_ihave_gossip: true` only for a no-IHAVE variant.
 
-### Partial-mode log keys
-
-Structured slog lines emitted by partial mode (use `att_digest` — the hex-encoded 8-byte SHA-256
-prefix of `attestation_data` — to correlate across the pipeline):
-
-- `self_published`, `attestation_validated` — per-position publish/validate lifecycle.
-- `partial_send_tick`, `partial_send_data`, `partial_send_metadata` — outgoing per-(peer, tick)
-  and per-bucket detail.
-- `partial_fanout_publish` — fanout publisher's eager batch send.
-- `partial_recv_tick`, `partial_recv_metadata`, `partial_recv_batch` — incoming per-(peer, tick)
-  and per-bucket detail.
-
-Wire-level tracer lines (`topic_message_*`, `partial_*`) are attestation-aware (`att_count`,
-`att_data_bytes`, `sig_bytes`, …) for bandwidth analysis.
-
 ## Analysis
 
-`analysis/prelim-analysis.py <dir>` prints a classic-vs-partial comparison (time-to-receive-95%
-latency and a received-bytes composition table) for a run or experiment directory. All numbers are
-scoped to the last slot only: per node it counts between the `starting slot`/`slot complete` log
-lines for `num_slots` and discards everything after the slot-ends line, so the post-slot
-re-advertisement/drain tail and earlier-slot warmup don't skew the per-slot picture.
+`analysis/prelim-analysis.py <run-or-experiment-dir>` prints a classic-vs-partial comparison:
+time-to-receive latency percentiles and a received-bytes breakdown (attestation data, signatures,
+and control), scoped to the last slot.
+
+`analysis/plot_arrival_latency_cdf.py` (single node, classic vs partial) and
+`analysis/plot_arrival_delays_cdf.py` (sim vs mainnet) write arrival-delay CDF plots to `graphs/`.
 
 ## Run Outputs
 
@@ -188,9 +150,8 @@ Experiment runs create an experiment directory with `experiment.yaml`, shared `t
 
 ## Timing
 
-`cmd/attestation/main.go` starts slot 1 approximately two minutes after process startup. Set
-`stop_time_minutes` long enough to cover startup, `slot_duration_seconds * num_slots`, and the
-final 30 second drain sleep.
+Slot 1 starts about two minutes after the simulator starts. Set `stop_time_minutes` long enough to
+cover that startup, `slot_duration_seconds * num_slots`, and a final ~30 second drain.
 
 ## Development
 
@@ -213,6 +174,3 @@ Build the Go simulator with:
 cd cmd/attestation
 go build -buildvcs=false -o attestation .
 ```
-
-Avoid running long Shadow simulations unless you intentionally want to spend the time and
-resources.
