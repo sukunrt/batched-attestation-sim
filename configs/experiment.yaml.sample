@@ -35,7 +35,6 @@ simulations:
     num_slots: 5
     slot_duration_seconds: 10
     num_attestors: 512
-    num_messages_per_attestor: 1
     attestation_validation_delay_ms: 30
     attestation_validation_std_dev_ms: 5
     publish_delay_mean_ms: 0
@@ -53,7 +52,6 @@ simulations:
     num_slots: 5
     slot_duration_seconds: 10
     num_attestors: 512
-    num_messages_per_attestor: 1
     attestation_validation_delay_ms: 30
     attestation_validation_std_dev_ms: 5
     publish_delay_mean_ms: 0

@@ -9,10 +9,7 @@ message Attestation {
   int32 node_num = 1;
   int32 slot_num = 2;
   bytes data = 4;
-  int32 msg_index = 6;
   bytes signature = 7;
-  reserved 3, 5;
-  reserved "publish_at_unix_ms", "expected_publish_at_unix_ms";
 }
 
 // BatchedAttestation carries attestations from multiple committee members

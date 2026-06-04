@@ -71,7 +71,6 @@ def _sim_params_to_config(
             attestation_validation_delay_ms=params.attestation_validation_delay_ms,
             attestation_validation_std_dev_ms=params.attestation_validation_std_dev_ms,
             publish_delay_mean_ms=params.publish_delay_mean_ms,
-            num_messages_per_attestor=params.num_messages_per_attestor,
             stop_time_minutes=params.stop_time_minutes,
             log_level=params.log_level,
             bandwidth_log_frequency_ms=params.bandwidth_log_frequency_ms,

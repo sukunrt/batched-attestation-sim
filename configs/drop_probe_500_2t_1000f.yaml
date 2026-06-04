@@ -26,7 +26,6 @@ simulations:
     num_slots: 2
     slot_duration_seconds: 10
     num_attestors: 1000
-    num_messages_per_attestor: 1
     attestation_data_size: 128
     signature_size: 96
     attestation_validation_delay_ms: 30
@@ -47,7 +46,6 @@ simulations:
     num_slots: 2
     slot_duration_seconds: 10
     num_attestors: 1000
-    num_messages_per_attestor: 1
     attestation_data_size: 128
     signature_size: 96
     attestation_validation_delay_ms: 30

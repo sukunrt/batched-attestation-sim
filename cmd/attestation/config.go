@@ -25,7 +25,6 @@ type SimConfig struct {
 	PerAttestationValidationUs    int                  `yaml:"per_attestation_validation_us"`
 	NumAttestors                  int                  `yaml:"num_attestors"`
 	PublishDelayMeanMs            int                  `yaml:"publish_delay_mean_ms"`
-	NumMessagesPerAttestor        int                  `yaml:"num_messages_per_attestor"`
 	StopTimeMinutes               float64              `yaml:"stop_time_minutes"`
 	LogLevel                      string               `yaml:"log_level"`
 	BandwidthLogFrequencyMs       int                  `yaml:"bandwidth_log_frequency_ms"`

@@ -106,7 +106,6 @@ class AttestationSimConfig(BaseModel):
     validation_batch_window_ms: int = 5
     per_attestation_validation_us: int = 100
     publish_delay_mean_ms: int = 0
-    num_messages_per_attestor: int = 1
     stop_time_minutes: float = 30.0
     log_level: Literal["debug", "info", "warn", "error"] = "info"
     bandwidth_log_frequency_ms: int = 100
@@ -151,7 +150,6 @@ class AttestationSimParams(BaseModel):
     validation_batch_window_ms: int = 5
     per_attestation_validation_us: int = 100
     publish_delay_mean_ms: int = 0
-    num_messages_per_attestor: int = 1
     stop_time_minutes: float = 30.0
     log_level: Literal["debug", "info", "warn", "error"] = "info"
     bandwidth_log_frequency_ms: int = 100

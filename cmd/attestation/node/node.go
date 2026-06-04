@@ -44,11 +44,10 @@ type TopicMembership struct {
 // Node is a single simulated attestor node. All fields are populated by the
 // caller before Start; the Node itself does not load configuration.
 type Node struct {
-	Num                    int
-	PublishSlots           map[int]struct{}
-	NumTopics              int
-	NumMessagesPerAttestor int
-	BandwidthLogFrequency  time.Duration
+	Num                   int
+	PublishSlots          map[int]struct{}
+	NumTopics             int
+	BandwidthLogFrequency time.Duration
 
 	AttestationDataSize        int
 	SignatureSize              int
@@ -271,10 +270,6 @@ func (n *Node) runReceiverClassic(ctx context.Context, sub *pubsub.Subscription,
 }
 
 func (n *Node) runPublisherClassic(ctx context.Context, numSlots int, slotDuration time.Duration) {
-	if n.NumMessagesPerAttestor <= 0 {
-		n.NumMessagesPerAttestor = 1
-	}
-
 	runSlot := func(slot int) {
 		if _, ok := n.PublishSlots[slot]; !ok {
 			return
@@ -286,22 +281,20 @@ func (n *Node) runPublisherClassic(ctx context.Context, numSlots int, slotDurati
 			}
 		}
 
-		for msgIdx := range n.NumMessagesPerAttestor {
-			for i, topic := range n.topics {
-				data := n.attestationDataForSlot(slot, topic.String())
-				sig := make([]byte, n.SignatureSize)
-				crand.Read(sig)
-				att := n.attestationDataForSlotClassic(slot, data, sig, msgIdx)
-				buf, err := proto.Marshal(att)
-				if err != nil {
-					n.logger.Error("marshal failed", "slot", slot, "msg_index", msgIdx, "err", err)
-					continue
-				}
-				if err := topic.Publish(ctx, buf); err != nil {
-					n.logger.Error("publish failed", "slot", slot, "topic", i, "msg_index", msgIdx, "err", err)
-				} else {
-					n.Tracer.OnPublish(att, i)
-				}
+		for i, topic := range n.topics {
+			data := n.attestationDataForSlot(slot, topic.String())
+			sig := make([]byte, n.SignatureSize)
+			crand.Read(sig)
+			att := n.attestationDataForSlotClassic(slot, data, sig)
+			buf, err := proto.Marshal(att)
+			if err != nil {
+				n.logger.Error("marshal failed", "slot", slot, "err", err)
+				continue
+			}
+			if err := topic.Publish(ctx, buf); err != nil {
+				n.logger.Error("publish failed", "slot", slot, "topic", i, "err", err)
+			} else {
+				n.Tracer.OnPublish(att, i)
 			}
 		}
 	}
@@ -319,13 +312,12 @@ func (n *Node) runPublisherClassic(ctx context.Context, numSlots int, slotDurati
 
 }
 
-func (n *Node) attestationDataForSlotClassic(slot int, data, sig []byte, msgIdx int) *pb.Attestation {
+func (n *Node) attestationDataForSlotClassic(slot int, data, sig []byte) *pb.Attestation {
 	return &pb.Attestation{
 		NodeNum:   int32(n.Num),
 		Data:      data,
 		Signature: sig,
 		SlotNum:   int32(slot),
-		MsgIndex:  int32(msgIdx),
 	}
 }
 

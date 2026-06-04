@@ -43,11 +43,11 @@ func NewSlogTracer(nodeNum int) *SlogTracer {
 }
 
 func (s *SlogTracer) OnPublish(att *pb.Attestation, topicIndex int) {
-	s.logger.Info("published", "slot", att.SlotNum, "committee_index", topicIndex, "msg_index", att.MsgIndex)
+	s.logger.Info("published", "slot", att.SlotNum, "committee_index", topicIndex)
 }
 
 func (s *SlogTracer) OnReceive(nodeNum int, att *pb.Attestation, topicIndex int, latencyMs int64) {
-	s.logger.Info("received", "from", att.NodeNum, "slot", att.SlotNum, "committee_index", topicIndex, "msg_index", att.MsgIndex, "latency_ms", latencyMs)
+	s.logger.Info("received", "from", att.NodeNum, "slot", att.SlotNum, "committee_index", topicIndex, "latency_ms", latencyMs)
 }
 
 func (s *SlogTracer) OnPartialPublish(slot, topicIndex, position int, attData []byte) {

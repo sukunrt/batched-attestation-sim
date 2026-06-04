@@ -28,7 +28,6 @@ simulation:
   num_slots: 5                  # number of slots to simulate
   slot_duration_seconds: 10     # seconds per slot
   num_attestors: 512            # publishers per slot
-  num_messages_per_attestor: 1  # messages each attestor publishes per slot
   attestation_data_size: 128    # bytes of shared attestation data
   signature_size: 96            # bytes per BLS signature
 

@@ -39,7 +39,7 @@ import numpy as np
 import yaml
 
 # Classic-mode receive (from SlogTracer.OnReceive, simple-format slog):
-# "<ts> INFO received node=N from=F slot=S committee_index=C msg_index=I latency_ms=L"
+# "<ts> INFO received node=N from=F slot=S committee_index=C latency_ms=L"
 RECEIVED_PAT = re.compile(
     r'\breceived\b.*?\b(?:from|idx)=(\d+)\b.*?\bslot=(\d+)\b.*?\bcommittee_index=(\d+)\b.*?\blatency_ms=(\d+)'
 )

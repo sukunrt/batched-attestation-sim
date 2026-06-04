@@ -84,7 +84,6 @@ func main() {
 		GossipsubParams:            sim.GossipsubParams,
 		VerificationDelay:          sim.ValidationDelayFunc(),
 		PublishDelay:               sim.PublishDelayFunc(),
-		NumMessagesPerAttestor:     max(sim.NumMessagesPerAttestor, 1),
 		BandwidthLogFrequency:      sim.BandwidthLogFrequency(),
 		Host:                       newShadowHost(*nodeNum),
 		Network:                    &shadowNetwork{},

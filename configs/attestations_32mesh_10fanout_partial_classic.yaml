@@ -21,7 +21,6 @@ simulation:
   num_slots: 3
   slot_duration_seconds: 5
   num_attestors: 42
-  num_messages_per_attestor: 1
   attestation_validation_delay_ms: 5
   attestation_validation_std_dev_ms: 0
   publish_delay_mean_ms: 0

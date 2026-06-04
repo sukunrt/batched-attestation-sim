@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import yaml
 
-# Classic app-level receive: "received node=N from=F slot=S committee_index=C msg_index=I latency_ms=L"
+# Classic app-level receive: "received node=N from=F slot=S committee_index=C latency_ms=L"
 CLASSIC_PAT = re.compile(
     r"\breceived node=\d+.*?\bslot=(\d+)\b.*?\bcommittee_index=(\d+)\b.*?\blatency_ms=(\d+)"
 )

@@ -24,7 +24,6 @@ simulation:
   num_slots: 3
   slot_duration_seconds: 5
   num_attestors: 20
-  num_messages_per_attestor: 1
   attestation_data_size: 128
   signature_size: 96
 
