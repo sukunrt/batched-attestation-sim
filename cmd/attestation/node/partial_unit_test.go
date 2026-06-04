@@ -98,7 +98,9 @@ func peerDeclinesPartial(peer.ID) bool { return false }
 func makePeers(n int, gossip bool) map[peer.ID]peerState {
 	peers := make(map[peer.ID]peerState, n)
 	for i := range n {
-		peers[peer.ID(fmt.Sprintf("p%d", i))] = peerState{gossipPeer: gossip}
+		// A gossip peer is modeled as freshly selected by an EmitGossip
+		// heartbeat, so it is primed to receive our Available list this tick.
+		peers[peer.ID(fmt.Sprintf("p%d", i))] = peerState{gossipPeer: gossip, sendAvailableList: gossip}
 	}
 	return peers
 }
@@ -247,7 +249,7 @@ func TestControlEnvelopeRoundtrip(t *testing.T) {
 
 func TestBuildBucketMetadataNilWhenNothingToSay(t *testing.T) {
 	b := newAttestationState([]byte("d"))
-	got := getAttestationMetadata(b, testCommitteeSize, 1, nil)
+	got := getAttestationMetadata(b, testCommitteeSize, 1, nil, true)
 	assert.Nil(t, got)
 }
 
@@ -257,7 +259,7 @@ func TestBuildBucketMetadataAvailableIncludesAllValidated(t *testing.T) {
 	b.validated[5] = struct{}{}
 	b.validated[2] = struct{}{}
 
-	got := getAttestationMetadata(b, testCommitteeSize, 1, nil)
+	got := getAttestationMetadata(b, testCommitteeSize, 1, nil, true)
 	require.NotNil(t, got)
 	gotBm := bitmap.Bitmap(got.Available)
 	assert.True(t, gotBm.Get(0))
@@ -268,7 +270,7 @@ func TestBuildBucketMetadataAvailableIncludesAllValidated(t *testing.T) {
 
 func TestBuildBucketMetadataRequestsPopulated(t *testing.T) {
 	b := newAttestationState([]byte("d"))
-	got := getAttestationMetadata(b, testCommitteeSize, 1, []int{1, 4, 8})
+	got := getAttestationMetadata(b, testCommitteeSize, 1, []int{1, 4, 8}, false)
 	require.NotNil(t, got)
 	reqBm := bitmap.Bitmap(got.Requests)
 	for _, pos := range []int{1, 4, 8} {

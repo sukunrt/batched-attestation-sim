@@ -59,6 +59,13 @@ func newPeerAttestationState(committeeSize int) *peerAttestationState {
 // the AttestationState.
 type peerState struct {
 	gossipPeer bool
+	// sendAvailableList is set when EmitGossip selects this peer for a gossip
+	// heartbeat round. The next publish tick includes our Available list to the
+	// peer and the flag is cleared (the peer is dropped from peerStates after
+	// serving), so Available is advertised at heartbeat cadence rather than
+	// re-sent every publish tick in response to the peer's own Available — which
+	// re-adds it via onIncomingRPC without setting this flag.
+	sendAvailableList bool
 }
 
 // AttestationState is the per-(topic, slot, attestation_data) state.
@@ -351,12 +358,14 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 					// satisfied none of it — requests are non-persistent.
 					bps.pendingWant = newCommitteeBitmap(m.committeeSize)
 
-					// Metadata: only gossip peers. Every gossip peer in
-					// peerStates is served its Available this tick (the map
-					// only holds peers (re-)added since we last drained it).
+					// Metadata: only gossip peers. We advertise our Available
+					// list only when sendAvailableList is set (once per
+					// EmitGossip heartbeat); Requests (Wants) are always served.
+					// This keeps available re-advertisement at heartbeat cadence
+					// instead of every publish tick.
 					if ps.gossipPeer {
 						wantList := wantPerPeerPerData[p][attDataStr]
-						md := getAttestationMetadata(b, m.committeeSize, slot, wantList)
+						md := getAttestationMetadata(b, m.committeeSize, slot, wantList, ps.sendAvailableList)
 						if md != nil {
 							ctrlEnvelope.Metadatas = append(ctrlEnvelope.Metadatas, md)
 							m.logger.Info("partial_send_metadata",
@@ -506,20 +515,22 @@ func selectIWantTargets(b *AttestationState, peerStates map[peer.ID]peerState, c
 }
 
 // getAttestationMetadata assembles a per-bucket CommitteeAttestationPartsMetadata.
-// `Available` is populated from the bucket's validated positions; `wantList`
-// populates `Requests`. Returns nil if both would be empty.
+// `Available` is populated from the bucket's validated positions only when
+// `includeAvailable` is set (gated to the gossip heartbeat); `wantList`
+// populates `Requests` regardless. Returns nil if both would be empty.
 func getAttestationMetadata(
 	b *AttestationState,
 	committeeSize int,
 	slot int,
 	wantList []int,
+	includeAvailable bool,
 ) *pb.CommitteeAttestationPartsMetadata {
 	md := &pb.CommitteeAttestationPartsMetadata{
 		Slot:            int32(slot),
 		AttestationData: b.data,
 	}
 
-	if len(b.validated) > 0 {
+	if includeAvailable && len(b.validated) > 0 {
 		avail := newCommitteeBitmap(committeeSize)
 		for pos := range b.validated {
 			avail.Set(pos)
@@ -620,10 +631,12 @@ func (m *partialAttestationManager) onEmitGossip(topic string, groupID []byte, g
 
 	for _, p := range gossipPeers {
 		ps := peerStates[p]
-		if !ps.gossipPeer {
-			ps.gossipPeer = true
-			peerStates[p] = ps
-		}
+		ps.gossipPeer = true
+		// Advertise our Available list to this peer on the next publish tick.
+		// Set only here (per heartbeat), so available re-advertisement runs at
+		// heartbeat cadence rather than every publish tick.
+		ps.sendAvailableList = true
+		peerStates[p] = ps
 	}
 }
 

@@ -138,13 +138,13 @@ func TestE2EMultiTopicPerTopicCommittees(t *testing.T) {
 		b := newAttestationState([]byte("probe"))
 		b.validated[0] = struct{}{}
 		b.validated[3] = struct{}{}
-		md := getAttestationMetadata(b, numAttestors, 1, nil)
+		md := getAttestationMetadata(b, numAttestors, 1, nil, true)
 		require.NotNil(t, md)
 		assert.Equalf(t, wantBitmapBytes, len(md.Available),
 			"available bitmap must be %d bytes for num_attestors=%d (was %d)",
 			wantBitmapBytes, numAttestors, len(md.Available))
 
-		req := getAttestationMetadata(b, numAttestors, 2, []int{1, 2})
+		req := getAttestationMetadata(b, numAttestors, 2, []int{1, 2}, false)
 		require.NotNil(t, req)
 		assert.Equalf(t, wantBitmapBytes, len(req.Requests),
 			"requests bitmap must be %d bytes for num_attestors=%d (was %d)",
