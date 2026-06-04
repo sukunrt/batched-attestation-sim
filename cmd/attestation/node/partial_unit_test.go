@@ -87,8 +87,11 @@ func runPublishActions(
 	return out
 }
 
-func alwaysPushMesh(peer.ID) bool { return true }
-func neverPushMesh(peer.ID) bool  { return false }
+// peerRequestsPartial callbacks for runPublishActions: whether a peer has
+// requested partial messages (and thus may receive data payloads). The
+// extension drops data to a peer that returns false.
+func peerAcceptsPartial(peer.ID) bool  { return true }
+func peerDeclinesPartial(peer.ID) bool { return false }
 
 // makePeers returns n peer states with IDs "p0".."p<n-1>" and the given
 // gossipPeer flag.
@@ -244,7 +247,7 @@ func TestControlEnvelopeRoundtrip(t *testing.T) {
 
 func TestBuildBucketMetadataNilWhenNothingToSay(t *testing.T) {
 	b := newAttestationState([]byte("d"))
-	got := getAttestationMetadata(b, testCommitteeSize, 1, false, nil)
+	got := getAttestationMetadata(b, testCommitteeSize, 1, nil)
 	assert.Nil(t, got)
 }
 
@@ -254,7 +257,7 @@ func TestBuildBucketMetadataAvailableIncludesAllValidated(t *testing.T) {
 	b.validated[5] = struct{}{}
 	b.validated[2] = struct{}{}
 
-	got := getAttestationMetadata(b, testCommitteeSize, 1, true, nil)
+	got := getAttestationMetadata(b, testCommitteeSize, 1, nil)
 	require.NotNil(t, got)
 	gotBm := bitmap.Bitmap(got.Available)
 	assert.True(t, gotBm.Get(0))
@@ -265,21 +268,13 @@ func TestBuildBucketMetadataAvailableIncludesAllValidated(t *testing.T) {
 
 func TestBuildBucketMetadataRequestsPopulated(t *testing.T) {
 	b := newAttestationState([]byte("d"))
-	got := getAttestationMetadata(b, testCommitteeSize, 1, false, []int{1, 4, 8})
+	got := getAttestationMetadata(b, testCommitteeSize, 1, []int{1, 4, 8})
 	require.NotNil(t, got)
 	reqBm := bitmap.Bitmap(got.Requests)
 	for _, pos := range []int{1, 4, 8} {
 		assert.True(t, reqBm.Get(pos), "position %d should be set in requests", pos)
 	}
 	assert.Empty(t, got.Available)
-}
-
-func TestBuildBucketMetadataNilWhenSendHaveButNoValidated(t *testing.T) {
-	// sendHave=true but nothing validated yet → no Available bits, and with no
-	// Want either, returns nil.
-	b := newAttestationState([]byte("d"))
-	got := getAttestationMetadata(b, testCommitteeSize, 1, true, nil)
-	assert.Nil(t, got)
 }
 
 // -----------------------------------------------------------------------------
@@ -434,53 +429,6 @@ func TestSelectIWantTargetsSortsPerPeerOutput(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// selectIHaveRecipients
-// -----------------------------------------------------------------------------
-
-func TestSelectIHaveRecipientsSelectsAllEligibleGossipPeers(t *testing.T) {
-	m := newPartialUnitManager(t)
-	now := time.Now()
-	peers := makePeers(10, true)
-	got := m.selectIHaveRecipients(peers, now)
-	assert.Len(t, got, 10)
-}
-
-func TestSelectIHaveRecipientsSkipsNonGossip(t *testing.T) {
-	m := newPartialUnitManager(t)
-	now := time.Now()
-	peers := map[peer.ID]peerState{
-		peer.ID("g0"): {gossipPeer: true},
-		peer.ID("m0"): {gossipPeer: false},
-	}
-	got := m.selectIHaveRecipients(peers, now)
-	assert.Len(t, got, 1)
-	assert.Contains(t, got, peer.ID("g0"))
-}
-
-func TestSelectIHaveRecipientsSkipsRateLimited(t *testing.T) {
-	m := newPartialUnitManager(t)
-	now := time.Now()
-	peers := map[peer.ID]peerState{
-		peer.ID("g0"): {gossipPeer: true},
-		peer.ID("g1"): {gossipPeer: true},
-	}
-	m.peerNextGossipAt[peer.ID("g0")] = now.Add(1 * time.Hour)
-	got := m.selectIHaveRecipients(peers, now)
-	assert.Len(t, got, 1)
-	assert.Contains(t, got, peer.ID("g1"))
-}
-
-func TestSelectIHaveRecipientsAdvancesSchedule(t *testing.T) {
-	m := newPartialUnitManager(t)
-	now := time.Now()
-	peers := map[peer.ID]peerState{peer.ID("g0"): {gossipPeer: true}}
-	m.selectIHaveRecipients(peers, now)
-	next, ok := m.peerNextGossipAt[peer.ID("g0")]
-	require.True(t, ok)
-	assert.Equal(t, now.Add(gossipInterval), next)
-}
-
-// -----------------------------------------------------------------------------
 // publishActions
 // -----------------------------------------------------------------------------
 
@@ -489,7 +437,7 @@ func TestPublishActionsMeshPeerReceivesData(t *testing.T) {
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
 	peers := makePeers(1, false)
-	out := runPublishActions(t, m, "t0", 1, peers, alwaysPushMesh)
+	out := runPublishActions(t, m, "t0", 1, peers, peerAcceptsPartial)
 	require.Len(t, out, 1)
 	got := out[peer.ID("p0")]
 	require.NotNil(t, got.payload, "mesh peer should receive a partial-message payload")
@@ -503,7 +451,7 @@ func TestPublishActionsMeshPeerNoDataWhenPeerDoesntRequestPartial(t *testing.T) 
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
 	peers := makePeers(1, false)
-	out := runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
+	out := runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
 	assert.Empty(t, out)
 }
 
@@ -512,7 +460,7 @@ func TestPublishActionsGossipPeerGetsAvailableOnly(t *testing.T) {
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
 	peers := makePeers(1, true)
-	out := runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
+	out := runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
 	require.Len(t, out, 1)
 	got := out[peer.ID("p0")]
 	require.NotNil(t, got.ctrl)
@@ -535,10 +483,11 @@ func TestPublishActionsGossipPeerWithPendingWantGetsData(t *testing.T) {
 	bps.pendingWant.Set(0)
 	b.peers[peer.ID("p0")] = bps
 
+	// A gossip peer that requested partial messages (peerRequestsPartial=true)
+	// receives the data for the position it wanted.
 	peers := map[peer.ID]peerState{peer.ID("p0"): {gossipPeer: true}}
-	m.peerNextGossipAt[peer.ID("p0")] = time.Now().Add(1 * time.Hour) // suppress Have
 
-	out := runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
+	out := runPublishActions(t, m, "t0", 1, peers, peerAcceptsPartial)
 	require.Len(t, out, 1)
 	got := out[peer.ID("p0")]
 	require.NotNil(t, got.payload)
@@ -552,7 +501,7 @@ func TestPublishActionsTwoBucketsBothEnveloped(t *testing.T) {
 	m.publishLocal("t0", 1, 1, []byte("s"), []byte("forkB"))
 
 	peers := makePeers(1, false)
-	out := runPublishActions(t, m, "t0", 1, peers, alwaysPushMesh)
+	out := runPublishActions(t, m, "t0", 1, peers, peerAcceptsPartial)
 	require.Len(t, out, 1)
 	got := out[peer.ID("p0")]
 	require.NotNil(t, got.payload)
@@ -571,7 +520,7 @@ func TestPublishActionsIHaveSentToAllEligibleGossipPeers(t *testing.T) {
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
 	peers := makePeers(10, true)
-	out := runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
+	out := runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
 
 	var availRecipients int
 	for _, c := range out {
@@ -582,56 +531,43 @@ func TestPublishActionsIHaveSentToAllEligibleGossipPeers(t *testing.T) {
 	assert.Equal(t, 10, availRecipients, "every eligible gossip peer must receive an Available envelope")
 }
 
-func TestPublishActionsRateLimitedPeerSkippedForAvailable(t *testing.T) {
+func TestPublishActionsDropsGossipPeerAfterServing(t *testing.T) {
 	m := newPartialUnitManager(t)
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
-	peers := makePeers(2, true)
-	m.peerNextGossipAt[peer.ID("p0")] = time.Now().Add(1 * time.Hour)
+	peers := makePeers(1, true)
+	runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
 
-	out := runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
-	if c, ok := out[peer.ID("p0")]; ok && c.ctrl != nil {
-		for _, md := range c.ctrl.Metadatas {
-			assert.Empty(t, md.Available, "rate-limited peer must not receive Available")
-		}
-	}
-	cP1 := out[peer.ID("p1")]
-	require.NotNil(t, cP1.ctrl)
-	require.Len(t, cP1.ctrl.Metadatas, 1)
-	assert.NotEmpty(t, cP1.ctrl.Metadatas[0].Available)
+	_, stillTracked := peers[peer.ID("p0")]
+	assert.False(t, stillTracked, "gossip peer must be dropped from peerStates after being served")
 }
 
-func TestPublishActionsRepeatedTicksRespectCooldown(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m := newPartialUnitManager(t)
-		m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
+func TestPublishActionsGossipPeerServedOncePerHeartbeat(t *testing.T) {
+	m := newPartialUnitManager(t)
+	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 
-		peers := makePeers(1, true)
+	peers := makePeers(1, true)
 
-		out := runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
-		require.NotNil(t, out[peer.ID("p0")].ctrl)
-		require.NotEmpty(t, out[peer.ID("p0")].ctrl.Metadatas[0].Available)
+	// First tick: gossip peer receives Available, then is dropped.
+	out := runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
+	require.NotNil(t, out[peer.ID("p0")].ctrl)
+	require.NotEmpty(t, out[peer.ID("p0")].ctrl.Metadatas[0].Available)
 
-		// Second tick: peer is now in cooldown.
-		out = runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
-		if c, ok := out[peer.ID("p0")]; ok && c.ctrl != nil {
-			for _, md := range c.ctrl.Metadatas {
-				assert.Empty(t, md.Available, "cooldown should suppress repeat Available")
-			}
-		}
+	// Second tick with the same map: the dropped peer is no longer served.
+	out = runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
+	assert.Empty(t, out, "dropped gossip peer must not be served again until re-gossiped")
 
-		// Advance past cooldown — Available should resume.
-		time.Sleep(gossipInterval + 10*time.Millisecond)
-		out = runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
-		require.NotNil(t, out[peer.ID("p0")].ctrl)
-		assert.NotEmpty(t, out[peer.ID("p0")].ctrl.Metadatas[0].Available)
-	})
+	// A heartbeat re-adds the peer; it is served Available again.
+	m.onEmitGossip("t0", slotGroupID(1), []peer.ID{peer.ID("p0")}, peers)
+	out = runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
+	require.NotNil(t, out[peer.ID("p0")].ctrl)
+	assert.NotEmpty(t, out[peer.ID("p0")].ctrl.Metadatas[0].Available)
 }
 
 func TestPublishActionsNoStateForSlotYieldsNothing(t *testing.T) {
 	m := newPartialUnitManager(t)
 	peers := makePeers(1, false)
-	out := runPublishActions(t, m, "t0", 99, peers, alwaysPushMesh)
+	out := runPublishActions(t, m, "t0", 99, peers, peerAcceptsPartial)
 	assert.Empty(t, out)
 }
 
@@ -645,7 +581,7 @@ func TestPublishActionsPendingWantClearedAfterTick(t *testing.T) {
 	b.peers[peer.ID("p0")] = bps
 
 	peers := map[peer.ID]peerState{peer.ID("p0"): {gossipPeer: true}}
-	runPublishActions(t, m, "t0", 1, peers, neverPushMesh)
+	runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
 
 	assert.Equal(t, 0, b.peers[peer.ID("p0")].pendingWant.OnesCount(), "pendingWant must be cleared after one tick")
 }
@@ -852,7 +788,7 @@ func TestOnIncomingRPCBadProtoReturnsError(t *testing.T) {
 // onEmitGossip
 // -----------------------------------------------------------------------------
 
-func TestOnEmitGossipMarksAndRegisters(t *testing.T) {
+func TestOnEmitGossipMarksGossipPeer(t *testing.T) {
 	m := newPartialUnitManager(t)
 	pid := peer.ID("p1")
 	peers := map[peer.ID]peerState{pid: {}}
@@ -860,8 +796,6 @@ func TestOnEmitGossipMarksAndRegisters(t *testing.T) {
 	m.onEmitGossip("t0", slotGroupID(1), []peer.ID{pid}, peers)
 
 	assert.True(t, peers[pid].gossipPeer)
-	_, ok := m.peerNextGossipAt[pid]
-	assert.True(t, ok)
 }
 
 func TestOnEmitGossipRespectsDisableFlag(t *testing.T) {
@@ -873,8 +807,6 @@ func TestOnEmitGossipRespectsDisableFlag(t *testing.T) {
 	m.onEmitGossip("t0", slotGroupID(1), []peer.ID{pid}, peers)
 
 	assert.False(t, peers[pid].gossipPeer)
-	_, ok := m.peerNextGossipAt[pid]
-	assert.False(t, ok)
 }
 
 // -----------------------------------------------------------------------------

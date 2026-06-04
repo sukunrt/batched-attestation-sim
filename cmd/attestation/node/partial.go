@@ -21,11 +21,6 @@ import (
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
 )
 
-// gossipInterval is the minimum gap between successive IHAVE-style envelopes
-// (CommitteeAttestationPartsMetadata) sent to the same gossip peer. Matches
-// the gossipsub heartbeat interval.
-const gossipInterval = 700 * time.Millisecond
-
 // maxIWantPerPosition caps how many gossip peers we ask for any one missing
 // committee position per (slot, attestation_data) bucket.
 const maxIWantPerPosition = 10
@@ -138,11 +133,6 @@ type partialAttestationManager struct {
 
 	mu    sync.Mutex
 	slots map[string]map[int]*PartialAttestationSlotState
-
-	// peerNextGossipAt is the earliest time at which we will next consider
-	// the peer for sending a metadata envelope. One schedule per peer, shared
-	// across topics/slots/buckets.
-	peerNextGossipAt map[peer.ID]time.Time
 }
 
 func newPartialAttestationManager(
@@ -156,14 +146,13 @@ func newPartialAttestationManager(
 		panic("CommitteeSize must be set (= num_attestors per topic)")
 	}
 	m := &partialAttestationManager{
-		logger:           logger,
-		node:             n,
-		publishStart:     publishStart,
-		slotDuration:     slotDuration,
-		committeeSize:    n.CommitteeSize,
-		topicIndexMap:    topicIndexMap,
-		slots:            make(map[string]map[int]*PartialAttestationSlotState),
-		peerNextGossipAt: make(map[peer.ID]time.Time),
+		logger:        logger,
+		node:          n,
+		publishStart:  publishStart,
+		slotDuration:  slotDuration,
+		committeeSize: n.CommitteeSize,
+		topicIndexMap: topicIndexMap,
+		slots:         make(map[string]map[int]*PartialAttestationSlotState),
 	}
 	return m
 }
@@ -294,8 +283,9 @@ func (m *partialAttestationManager) markValidated(topic string, slot int, data [
 // publishActions returns the PublishActionsFn for a given topic and slot.
 //
 // On each call:
-//   - Every eligible (peerNextGossipAt elapsed) gossip peer receives an
-//     "available" envelope this tick.
+//   - Every gossip peer currently in peerStates receives an "available"
+//     envelope and is then dropped from peerStates, so each gossip peer is
+//     served once per EmitGossip heartbeat rather than on every tick.
 //   - For each missing position any gossip peer advertises in their
 //     available, up to maxIWantPerPosition request targets are chosen across
 //     all peers; the per-bucket counter is bumped accordingly.
@@ -314,9 +304,6 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 			if ss == nil || len(ss.attestationsMap) == 0 {
 				return
 			}
-
-			now := time.Now()
-			iHavePeers := m.selectIHaveRecipients(peerStates, now)
 
 			// Per-bucket: select positions to IWANT from each peer based on
 			// what they advertise. This bumps requestCount.
@@ -339,17 +326,10 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 				var attestationDataWithForwards int
 
 				for attDataStr, b := range ss.attestationsMap {
-					var canSendData bool
 					bps := initAndGetPeerAttestationState(b, p, m.committeeSize)
 
-					if ps.gossipPeer {
-						canSendData = bps.pendingWant.OnesCount() > 0
-					} else {
-						canSendData = peerRequestsPartial(p)
-					}
-
 					// Data: build the BatchedAttestation for this bucket.
-					if canSendData {
+					if peerRequestsPartial(p) {
 						positions := m.claimAttestationsToSend(b, bps, ps.gossipPeer)
 						if len(positions) > 0 {
 							batch := m.encodeBatch(b, positions)
@@ -367,15 +347,16 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 						}
 					}
 
-					// Always clear pendintWants, even if we
+					// Always clear pendingWants, even if we
 					// satisfied none of it — requests are non-persistent.
 					bps.pendingWant = newCommitteeBitmap(m.committeeSize)
 
-					// Metadata: only gossip peers, only with new info.
+					// Metadata: only gossip peers. Every gossip peer in
+					// peerStates is served its Available this tick (the map
+					// only holds peers (re-)added since we last drained it).
 					if ps.gossipPeer {
-						_, sendHave := iHavePeers[p]
 						wantList := wantPerPeerPerData[p][attDataStr]
-						md := getAttestationMetadata(b, m.committeeSize, slot, sendHave, wantList)
+						md := getAttestationMetadata(b, m.committeeSize, slot, wantList)
 						if md != nil {
 							ctrlEnvelope.Metadatas = append(ctrlEnvelope.Metadatas, md)
 							m.logger.Info("partial_send_metadata",
@@ -386,11 +367,19 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 								"available_ones", availableOnes(md.Available),
 								"requests_ones", requestsOnes(md.Requests),
 								"md_bucket_bytes", proto.Size(md),
-								"send_have", sendHave,
 								"send_want", len(wantList) > 0,
 							)
 						}
 					}
+				}
+
+				// We've collected everything this gossip peer needs this
+				// round. Drop it from peerStates so we don't re-gossip on
+				// every publish tick; the next EmitGossip heartbeat re-adds
+				// it (and an incoming Want re-adds it sooner). Mesh peers are
+				// re-added each tick by the extension, so they stay.
+				if ps.gossipPeer {
+					delete(peerStates, p)
 				}
 
 				var encodedCtrl, encodedData []byte
@@ -453,6 +442,10 @@ func (m *partialAttestationManager) claimAttestationsToSend(
 	bps *peerAttestationState,
 	gossipPeer bool,
 ) []int {
+	if gossipPeer && bps.pendingWant.OnesCount() <= 0 {
+		return nil
+	}
+
 	candidates := make([]int, 0, len(b.validated))
 	for pos := range b.validated {
 		if b.sendCount[pos] >= m.node.MaxPeersPerAttestation {
@@ -461,10 +454,8 @@ func (m *partialAttestationManager) claimAttestationsToSend(
 		if bps.available.Get(pos) {
 			continue
 		}
-		if gossipPeer {
-			if !bps.pendingWant.Get(pos) {
-				continue
-			}
+		if gossipPeer && !bps.pendingWant.Get(pos) {
+			continue
 		}
 		candidates = append(candidates, pos)
 	}
@@ -474,29 +465,6 @@ func (m *partialAttestationManager) claimAttestationsToSend(
 		b.sendCount[pos]++
 	}
 	return candidates
-}
-
-// selectIHaveRecipients returns the set of gossip peers chosen to receive an
-// available-style envelope this tick: every eligible (peerNextGossipAt
-// elapsed) gossip peer.
-func (m *partialAttestationManager) selectIHaveRecipients(
-	peerStates map[peer.ID]peerState,
-	now time.Time,
-) map[peer.ID]struct{} {
-	nextGossipAt := now.Add(gossipInterval)
-	iHavePeers := make(map[peer.ID]struct{})
-
-	for p, ps := range peerStates {
-		if !ps.gossipPeer {
-			continue
-		}
-		next := m.peerNextGossipAt[p]
-		if now.After(next) {
-			m.peerNextGossipAt[p] = nextGossipAt
-			iHavePeers[p] = struct{}{}
-		}
-	}
-	return iHavePeers
 }
 
 // selectIWantTargets picks, for each missing position advertised by some
@@ -538,13 +506,12 @@ func selectIWantTargets(b *AttestationState, peerStates map[peer.ID]peerState, c
 }
 
 // getAttestationMetadata assembles a per-bucket CommitteeAttestationPartsMetadata.
-// `sendHave` chooses whether to populate `Available`; `wantList` populates
-// `Requests`. Returns nil if both would be empty.
+// `Available` is populated from the bucket's validated positions; `wantList`
+// populates `Requests`. Returns nil if both would be empty.
 func getAttestationMetadata(
 	b *AttestationState,
 	committeeSize int,
 	slot int,
-	sendHave bool,
 	wantList []int,
 ) *pb.CommitteeAttestationPartsMetadata {
 	md := &pb.CommitteeAttestationPartsMetadata{
@@ -552,7 +519,7 @@ func getAttestationMetadata(
 		AttestationData: b.data,
 	}
 
-	if sendHave && len(b.validated) > 0 {
+	if len(b.validated) > 0 {
 		avail := newCommitteeBitmap(committeeSize)
 		for pos := range b.validated {
 			avail.Set(pos)
@@ -641,8 +608,9 @@ func (m *partialAttestationManager) fanoutPublish(
 }
 
 // onEmitGossip is called by gossipsub during heartbeat to gossip to non-mesh
-// peers. Mark them as gossip peers and register them in the IHAVE schedule
-// (zero-time = immediately eligible for the next tick).
+// peers. Mark them as gossip peers; the next publish tick serves each one an
+// Available envelope and then drops it from peerStates until the following
+// heartbeat re-adds it.
 func (m *partialAttestationManager) onEmitGossip(topic string, groupID []byte, gossipPeers []peer.ID, peerStates map[peer.ID]peerState) {
 	if m.node.DisableIHaveGossip {
 		return
@@ -656,15 +624,6 @@ func (m *partialAttestationManager) onEmitGossip(topic string, groupID []byte, g
 			ps.gossipPeer = true
 			peerStates[p] = ps
 		}
-		m.registerGossipPeer(p)
-	}
-}
-
-// registerGossipPeer ensures peerNextGossipAt has an entry for p. The default
-// zero-time means "immediately eligible". Existing schedules are not reset.
-func (m *partialAttestationManager) registerGossipPeer(p peer.ID) {
-	if _, ok := m.peerNextGossipAt[p]; !ok {
-		m.peerNextGossipAt[p] = time.Time{}
 	}
 }
 
@@ -712,12 +671,13 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 		requests := bitmap.Bitmap(md.Requests)
 		bps.pendingWant.Or(md.Requests)
 
-		// A peer issuing metadata is by definition a gossip peer.
+		// A peer issuing metadata is by definition a gossip peer. Marking it
+		// here also re-adds it to peerStates if a prior publish tick dropped
+		// it, so its Want is served on the next tick.
 		if available.OnesCount() > 0 || requests.OnesCount() > 0 {
 			ps := peerStates[from]
 			ps.gossipPeer = true
 			peerStates[from] = ps
-			m.registerGossipPeer(from)
 		}
 
 		m.logger.Info("partial_recv_metadata",
