@@ -51,6 +51,47 @@ hosts.
 `topology.fanout_node_mesh_peers` controls how many random mesh nodes each fanout node connects
 to.
 
+## Remote Runs & Result Analysis
+
+Remote runs (`--remote sukun@ethp2p` on `attestations` or `experiment`) rsync the working tree,
+build on the remote, run Shadow, then **pack the run/experiment directory into a `.tar.gz` under
+`runs/` on the remote and delete the unpacked tree**. The tarball is not downloaded automatically,
+and the unpacked tree is large (tens of GB), so fetch the tarball — never the directory:
+
+```bash
+# 1. fetch the tarball back
+rsync -ah --info=progress2 \
+  sukun@ethp2p:/home/sukun/batched-attestation-sim/runs/<name>.tar.gz runs/
+# 2. extract (experiment dir lands at runs/<name>/exp-<ts>-<hash>/)
+tar xzf runs/<name>.tar.gz -C runs/
+```
+
+Then run the classic-vs-partial analysis on the experiment dir (the one holding `topology.json`
+plus a `runs/` subdir):
+
+```bash
+uv run python analysis/prelim-analysis.py runs/<name>/exp-<ts>-<hash>
+```
+
+It parses each host's `shadow.data/hosts/*/attestation.*.stderr` (last slot only) and prints
+time-to-receive percentiles plus the received-byte split (att_data / signature / control) for
+classic vs partial. Don't pass a `timeout` — large topologies take minutes to parse.
+
+### Arrival-latency plot
+
+`analysis/plot_arrival_latency_cdf.py` plots the per-attestation arrival-latency (time-to-receive)
+CDF from a single node's perspective for one topic/slot, overlaying the classic and partial runs:
+
+```bash
+uv run python analysis/plot_arrival_latency_cdf.py runs/<name>/exp-<ts>-<hash> \
+  --node 3 --topic 0 --slot 2
+```
+
+Defaults are `--node 3 --topic 0 --slot 2`; the plot is written to
+`graphs/arrival_latency_node<N>_topic<T>_slot<S>.png` (`graphs/` is checked in). Super nodes are
+mesh nodes (not in `fanout_nodes`) with `upload_bw_mbps >= 1024`; `committee_index` in the receive
+log lines is the topic index.
+
 ## Classic Vs Partial Messages
 
 The Go simulator is in `cmd/attestation`.
