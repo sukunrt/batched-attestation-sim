@@ -1,0 +1,9 @@
+[
+  "tests/test_runner_att_propagation.py::test_att_propagation_emits_flag_and_n",
+  "tests/test_runner_att_propagation.py::test_att_propagation_emits_zero_bitmap_d_values",
+  "tests/test_runner_att_propagation.py::test_mutual_exclusion_rejected",
+  "tests/test_runner_att_propagation.py::test_no_att_propagation_flag_when_off",
+  "tests/test_runner_att_propagation.py::test_tunables_survive_experiment_params_to_config",
+  "tests/test_runner_tiered_d.py::test_tiered_d_emits_per_node",
+  "tests/test_runner_tiered_d.py::test_uniform_d_falls_back_to_default"
+]
