@@ -1,0 +1,119 @@
+# Experiment: tiered gossipsub mesh degree (super vs home) vs uniform D=8.
+# Shared topology:
+#   - 500 mesh nodes, degree 30
+#   - super_node_fraction 0.2 (super = 1024 Mbps, home = 25/50 Mbps)
+#   - 2 topics per node, 500 fanout nodes per topic (1000 total fanout)
+#   - 500 attestors per topic per slot
+#
+# Tiered variants give super nodes a large mesh (Dlow=8, D=12, Dhigh=16) and
+# home nodes a small mesh (Dlow=3, D=4, Dhigh=5). Uniform variants use the
+# default D=8 (Dlow=6, Dhigh=12) for every node. Each pair runs under classic
+# and partial-message modes, all on the same topology.
+
+topology:
+  num_nodes: 500
+  degree: 30
+  type: random
+  seed: 42
+  super_node_fraction: 0.2
+  fanout_nodes_per_topic: 500
+  fanout_node_mesh_peers: 2
+
+simulations:
+  # 1. Tiered D, classic gossipsub
+  - supernode_d:
+      Dlow: 8
+      D: 12
+      Dhigh: 16
+    homenode_d:
+      Dlow: 3
+      D: 4
+      Dhigh: 5
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 10.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    use_partial_messages: false
+    disable_ihave_gossip: false
+
+  # 2. Uniform D=8, classic gossipsub
+  - gossipsub_params:
+      Dlow: 6
+      D: 8
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 10.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    use_partial_messages: false
+    disable_ihave_gossip: false
+
+  # 3. Tiered D, partial messages (IHAVE/IWANT gossip still enabled)
+  - supernode_d:
+      Dlow: 8
+      D: 12
+      Dhigh: 16
+    homenode_d:
+      Dlow: 3
+      D: 4
+      Dhigh: 5
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 10.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    use_partial_messages: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    disable_ihave_gossip: false
+
+  # 4. Uniform D=8, partial messages
+  - gossipsub_params:
+      Dlow: 6
+      D: 8
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 10.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    use_partial_messages: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    disable_ihave_gossip: false
