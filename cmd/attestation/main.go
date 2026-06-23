@@ -40,6 +40,7 @@ func main() {
 		disableIHaveGossip   = flag.Bool("disable-ihave-gossip", false, "Disable IHAVE gossip")
 		committeeMemberships = flag.String("committee-memberships", "", "Semicolon-separated topic:position pairs, e.g. 0:7;1:42")
 		usePartialMessages   = flag.Bool("use-partial-messages", false, "Use partial messages (list of attestor IDs + ephemeral iwant)")
+		gossipsubParams      = flag.String("gossipsub-params", "", "Per-node gossipsub mesh override, e.g. Dlow:8,D:12,Dhigh:16; empty uses the config value")
 	)
 	flag.Parse()
 
@@ -49,6 +50,13 @@ func main() {
 	sim, err := LoadConfig(*configFile)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+	if *gossipsubParams != "" {
+		p, err := parseGossipsubParams(*gossipsubParams)
+		if err != nil {
+			log.Fatalf("gossipsub-params: %v", err)
+		}
+		sim.GossipsubParams = p
 	}
 
 	publishSlots := make(map[int]struct{})
@@ -151,6 +159,51 @@ func parseCommitteeMemberships(s string) []node.TopicMembership {
 		out = append(out, node.TopicMembership{TopicIndex: topic, Position: pos})
 	}
 	return out
+}
+
+// parseGossipsubParams parses a "Dlow:8,D:12,Dhigh:16" string into
+// GossipsubParams. All three keys are required, must be positive, and must
+// satisfy Dlow <= D <= Dhigh. Returns an error rather than fataling so the
+// parsing is unit-testable; the caller decides how to handle a bad flag.
+func parseGossipsubParams(s string) (node.GossipsubParams, error) {
+	var p node.GossipsubParams
+	seen := map[string]bool{}
+	for entry := range strings.SplitSeq(s, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		key, valStr, ok := strings.Cut(entry, ":")
+		if !ok {
+			return p, fmt.Errorf("invalid entry %q (want key:value)", entry)
+		}
+		key = strings.TrimSpace(key)
+		val, err := strconv.Atoi(strings.TrimSpace(valStr))
+		if err != nil {
+			return p, fmt.Errorf("invalid value %q: %w", valStr, err)
+		}
+		switch key {
+		case "Dlow":
+			p.Dlow = val
+		case "D":
+			p.D = val
+		case "Dhigh":
+			p.Dhigh = val
+		default:
+			return p, fmt.Errorf("unknown key %q (want Dlow, D, Dhigh)", key)
+		}
+		seen[key] = true
+	}
+	if !seen["Dlow"] || !seen["D"] || !seen["Dhigh"] {
+		return p, fmt.Errorf("%q must set Dlow, D, and Dhigh", s)
+	}
+	if p.Dlow <= 0 || p.D <= 0 || p.Dhigh <= 0 {
+		return p, fmt.Errorf("%q must be positive", s)
+	}
+	if p.Dlow > p.D || p.D > p.Dhigh {
+		return p, fmt.Errorf("%q must satisfy Dlow <= D <= Dhigh", s)
+	}
+	return p, nil
 }
 
 func parseIntList(s string) []int {
