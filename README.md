@@ -98,6 +98,25 @@ numbered after the mesh nodes. For example, `num_nodes: 32`, `num_topics: 1`, an
 `topology.fanout_node_mesh_peers` controls how many random mesh nodes each fanout node connects
 to.
 
+### Per-tier mesh degree
+
+By default every node uses the same `gossipsub_params` (`Dlow`/`D`/`Dhigh`). To give
+high-bandwidth "super" nodes a larger mesh than home nodes, set `supernode_d` and/or `homenode_d`
+(each a full `Dlow`/`D`/`Dhigh` block). Super nodes (`upload_bw_mbps >= 1024`, set by
+`topology.super_node_fraction`) use `supernode_d`; home nodes use `homenode_d`. Either falls back
+to `gossipsub_params` when unset, so a uniform run needs only `gossipsub_params`.
+
+```yaml
+supernode_d:
+  Dlow: 8
+  D: 12
+  Dhigh: 16
+homenode_d:
+  Dlow: 3
+  D: 4
+  Dhigh: 5
+```
+
 ## Classic And Partial Messages
 
 Classic mode is the default when `use_partial_messages` is false or omitted. Publishers send full
@@ -126,12 +145,15 @@ Set `disable_ihave_gossip: true` only for a no-IHAVE variant.
 
 ## Analysis
 
-`analysis/prelim-analysis.py <run-or-experiment-dir>` prints a classic-vs-partial comparison:
-time-to-receive latency percentiles and a received-bytes breakdown (attestation data, signatures,
-and control), scoped to the last slot.
+`analysis/prelim-analysis.py <run-or-experiment-dir>` prints time-to-receive latency percentiles
+and a received-bytes breakdown (attestation data, signatures, and control), scoped to the last
+slot. With a single mesh degree it compares classic vs partial; when an experiment mixes tiered-D
+and uniform-D variants it compares uniform-D vs tiered-D within each mode.
 
 `analysis/plot_arrival_latency_cdf.py` (single node, classic vs partial) and
 `analysis/plot_arrival_delays_cdf.py` (sim vs mainnet) write arrival-delay CDF plots to `graphs/`.
+Pass `--runs <dir> <dir> --labels <a> <b>` to overlay any two run directories (for example
+tiered-D vs uniform-D).
 
 ## Run Outputs
 

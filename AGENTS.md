@@ -209,6 +209,17 @@ simulations:
     ...
 ```
 
+### Per-tier mesh degree (`supernode_d` / `homenode_d`)
+
+The sim config also takes optional `supernode_d` and `homenode_d` blocks (each a full
+`Dlow`/`D`/`Dhigh` triple). `runner.generate_shadow_yaml` resolves each node's degree by
+bandwidth — super (`upload_bw_mbps >= SUPER_NODE_UPLOAD_MBPS`, i.e. `1024`) uses `supernode_d`,
+home uses `homenode_d`, each falling back to `gossipsub_params` — and passes it to *every* node
+via the `-gossipsub-params=Dlow:8,D:12,Dhigh:16` CLI flag. `cmd/attestation/main.go`'s
+`parseGossipsubParams` parses that flag and overrides `sim.GossipsubParams` for the process.
+`analysis/prelim-analysis.py` labels a run `tiered` when either tier block is present and compares
+uniform-D vs tiered-D within each mode.
+
 ## Testing
 
 Prefer simnet-backed Go tests driven by `testing/synctest` over running Shadow from tests. The
