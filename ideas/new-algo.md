@@ -29,4 +29,8 @@
 - There's a priority over the sends. For every message in our outbound queue: 
     - (topic_id, msg_id) => priority
 - We keep 10 outbound items going in parallel.  
+    - This is tricky to decide. For a supernode, the 10 outbound in parallel might be too small. 
+    - For a home node the 10 outbound in parallel, might be too much. 
+    - 1Gbit/s => 50 Homenodes saturated. 
+    - 
 

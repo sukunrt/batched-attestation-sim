@@ -1,0 +1,72 @@
+# Link-budget test for tiered mesh degree in partial mode.
+# Same shared topology as experiment_dtier_vs_uniform_500_f500_t2 (500 mesh,
+# 500 fanout/topic, 2 topics, super_node_fraction 0.2, degree 30).
+#
+# super-16 / home-4 -> average mesh degree 0.2*16 + 0.8*4 = 6.4 (vs uniform 8),
+# i.e. closer to link-neutral than super-12/home-4 (avg 5.6).
+#
+# Two partial-mode variants on the same topology:
+#   1. uniform D=8 (baseline)
+#   2. tiered super 12/16/24, home 3/4/5
+
+topology:
+  num_nodes: 500
+  degree: 30
+  type: random
+  seed: 42
+  super_node_fraction: 0.2
+  fanout_nodes_per_topic: 500
+  fanout_node_mesh_peers: 2
+
+simulations:
+  # 1. partial messages, uniform D=8
+  - gossipsub_params:
+      Dlow: 6
+      D: 8
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 10.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    use_partial_messages: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    disable_ihave_gossip: false
+
+  # 2. partial messages, tiered super-16 / home-4
+  - supernode_d:
+      Dlow: 12
+      D: 16
+      Dhigh: 24
+    homenode_d:
+      Dlow: 3
+      D: 4
+      Dhigh: 5
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 500
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 10.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    use_partial_messages: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0
+    divergent_attestor_fraction: 0.01
+    disable_ihave_gossip: false
