@@ -62,6 +62,8 @@ def _sim_params_to_config(
         simulation=config.AttestationSimConfig(
             topology=exp.topology,
             gossipsub_params=params.gossipsub_params,
+            supernode_d=params.supernode_d,
+            homenode_d=params.homenode_d,
             num_topics=params.num_topics,
             num_slots=params.num_slots,
             slot_duration_seconds=params.slot_duration_seconds,

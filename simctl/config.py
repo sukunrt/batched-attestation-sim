@@ -95,6 +95,11 @@ class AttestationSimConfig(BaseModel):
 
     topology: TopologyConfig
     gossipsub_params: GossipsubParams = GossipsubParams()
+    # Optional per-tier mesh degree. Super nodes (upload_bw_mbps >= 1024) use
+    # supernode_d, home nodes use homenode_d; either falls back to
+    # gossipsub_params when unset.
+    supernode_d: GossipsubParams | None = None
+    homenode_d: GossipsubParams | None = None
     num_topics: int = 1
     num_slots: int = 12
     slot_duration_seconds: int = 12
@@ -139,6 +144,9 @@ class AttestationSimParams(BaseModel):
     """Simulation parameters for a single run within an experiment (no topology)."""
 
     gossipsub_params: GossipsubParams = GossipsubParams()
+    # Optional per-tier mesh degree; see AttestationSimConfig.
+    supernode_d: GossipsubParams | None = None
+    homenode_d: GossipsubParams | None = None
     num_topics: int = 1
     num_slots: int = 12
     slot_duration_seconds: int = 12

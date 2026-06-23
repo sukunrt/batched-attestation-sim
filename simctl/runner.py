@@ -18,6 +18,11 @@ from simctl.topology import (
 )
 
 
+# Upload bandwidth (Mbps) at or above which a node is a "super" node. Mirrors
+# the threshold used in topology.get_bandwidth and the analysis scripts.
+SUPER_NODE_UPLOAD_MBPS = 1024
+
+
 def get_simlab_root() -> Path:
     """Get the simlab project root directory."""
     return Path(__file__).parent.parent.resolve()
@@ -188,6 +193,15 @@ def generate_shadow_yaml(
             f"-node-num={node_num}",
             f"-publish-mode={publish_mode}",
         ]
+
+        # Resolve this node's mesh degree by tier and pass it explicitly, so
+        # super and home nodes can run different D. Falls back to the shared
+        # gossipsub_params when a tier override is unset.
+        is_super = node.upload_bw_mbps >= SUPER_NODE_UPLOAD_MBPS
+        tier_d = config.supernode_d if is_super else config.homenode_d
+        eff_d = tier_d if tier_d is not None else config.gossipsub_params
+        args_parts.append(f"-gossipsub-params=Dlow:{eff_d.Dlow},D:{eff_d.D},Dhigh:{eff_d.Dhigh}")
+
         if config.disable_ihave_gossip:
             args_parts.append("-disable-ihave-gossip")
         if config.use_partial_messages:
