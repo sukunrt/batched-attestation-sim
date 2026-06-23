@@ -223,8 +223,10 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
     mesh_ids = topo["super_mesh"] | topo["regular_mesh"]
 
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
-    mode = "partial" if cfg["simulation"].get("use_partial_messages") else "classic"
-    last_slot = int(cfg["simulation"].get("num_slots", 1))
+    sim = cfg["simulation"]
+    mode = "partial" if sim.get("use_partial_messages") else "classic"
+    tier = "tiered" if (sim.get("supernode_d") or sim.get("homenode_d")) else "uniform"
+    last_slot = int(sim.get("num_slots", 1))
 
     # Decide which nodes to parse bandwidth for (spot check — avoid scanning all stderrs).
     rng = rng or random.Random(42)
@@ -284,7 +286,8 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
 
     return {
         "mode": mode,
-        "num_topics": int(cfg["simulation"].get("num_topics", 1)),
+        "tier": tier,
+        "num_topics": int(sim.get("num_topics", 1)),
         "last_slot": last_slot,
         "t95": arr,
         "super_bw": class_bw(super_sorted),
@@ -315,10 +318,26 @@ def main():
     for rd in runs:
         res = analyze_run(rd, topo, num_samples=args.num_samples, rng=rng)
         if res is not None:
-            results[res["mode"]] = res
+            results[(res["mode"], res["tier"])] = res
 
-    if "classic" in results and "partial" in results:
-        print_comparison(results["classic"], results["partial"])
+    modes = sorted({m for m, _t in results})
+    tiers = {t for _m, t in results}
+
+    if "tiered" in tiers and "uniform" in tiers:
+        # tiered-D vs uniform-D within each mode (uniform is the baseline).
+        for mode in modes:
+            base = results.get((mode, "uniform"))
+            tiered = results.get((mode, "tiered"))
+            if base and tiered:
+                print(f"=== {mode}: uniform-D vs tiered-D ===\n")
+                print_comparison(base, f"{mode}/uniform", tiered, f"{mode}/tiered")
+    else:
+        # Single-tier experiment: fall back to classic-vs-partial.
+        tier = next(iter(tiers), None)
+        classic = results.get(("classic", tier))
+        partial = results.get(("partial", tier))
+        if classic and partial:
+            print_comparison(classic, "classic", partial, "partial")
 
 
 def print_table(title: str, headers: list[str], rows: list[list[str]]):
@@ -359,22 +378,23 @@ def data_share(d: dict) -> float:
     return (d["att_data_recv"] / denom * 100) if denom else 0.0
 
 
-def print_comparison(classic: dict, partial: dict):
+def print_comparison(a: dict, label_a: str, b: dict, label_b: str):
+    """Compare two runs. `delta` is how b differs from a (the baseline)."""
     # Latency
     pcts = [25, 50, 95, 99]
-    c_vals = [np.percentile(classic["t95"], p) for p in pcts]
-    p_vals = [np.percentile(partial["t95"], p) for p in pcts]
-    headers = ["mode"] + [f"p{p}" for p in pcts]
+    a_vals = [np.percentile(a["t95"], p) for p in pcts]
+    b_vals = [np.percentile(b["t95"], p) for p in pcts]
+    headers = ["variant"] + [f"p{p}" for p in pcts]
     rows = [
-        ["classic"] + [f"{v:.0f}" for v in c_vals],
-        ["partial"] + [f"{v:.0f}" for v in p_vals],
-        ["delta"]   + [pct_delta(c, p) for c, p in zip(c_vals, p_vals)],
+        [label_a] + [f"{v:.0f}" for v in a_vals],
+        [label_b] + [f"{v:.0f}" for v in b_vals],
+        ["delta"] + [pct_delta(x, y) for x, y in zip(a_vals, b_vals)],
     ]
-    ls = classic.get("last_slot", partial.get("last_slot"))
+    ls = a.get("last_slot", b.get("last_slot"))
     print_table(f"Latency: time-to-receive-95% (ms) — last slot ({ls}) only", headers, rows)
 
-    nt_c = classic["num_topics"]
-    nt_p = partial["num_topics"]
+    nt_a = a["num_topics"]
+    nt_b = b["num_topics"]
     # (header, bw-dict key, unit divisor)
     cols = [
         ("sent (MB)",     "sent_total",    1e6),
@@ -385,15 +405,15 @@ def print_comparison(classic: dict, partial: dict):
         ("att recv",      "att_recv",      1.0),
     ]
     for label, key in [("super", "super_bw"), ("regular", "regular_bw")]:
-        cb = classic[key]
-        pb = partial[key]
-        headers = ["mode"] + [h for h, _, _ in cols] + ["att_data %"]
-        c_row = ["classic"] + [f"{cb[k]/nt_c/unit:.2f}" for _, k, unit in cols] + [f"{data_share(cb):.1f}%"]
-        p_row = ["partial"] + [f"{pb[k]/nt_p/unit:.2f}" for _, k, unit in cols] + [f"{data_share(pb):.1f}%"]
-        d_row = ["delta"]   + [pct_delta(cb[k]/nt_c, pb[k]/nt_p) for _, k, _ in cols] + [f"{data_share(pb) - data_share(cb):+.1f}pp"]
+        ab = a[key]
+        bb = b[key]
+        headers = ["variant"] + [h for h, _, _ in cols] + ["att_data %"]
+        a_row = [label_a] + [f"{ab[k]/nt_a/unit:.2f}" for _, k, unit in cols] + [f"{data_share(ab):.1f}%"]
+        b_row = [label_b] + [f"{bb[k]/nt_b/unit:.2f}" for _, k, unit in cols] + [f"{data_share(bb):.1f}%"]
+        d_row = ["delta"] + [pct_delta(ab[k]/nt_a, bb[k]/nt_b) for _, k, _ in cols] + [f"{data_share(bb) - data_share(ab):+.1f}pp"]
         print_table(
-            f"Received wire composition — {label} (last slot ({ls}) only; mean per sampled mesh node, per topic; assumes equal usage across {nt_c} topics)",
-            headers, [c_row, p_row, d_row],
+            f"Received wire composition — {label} (last slot ({ls}) only; mean per sampled mesh node, per topic; assumes equal usage across {nt_a} topics)",
+            headers, [a_row, b_row, d_row],
         )
 
 

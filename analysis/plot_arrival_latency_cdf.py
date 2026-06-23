@@ -45,6 +45,22 @@ def latencies(stderr: Path, pat: re.Pattern, topic: int, slot: int) -> list[int]
     return out
 
 
+def run_latencies(run_dir: Path, node: int, topic: int, slot: int) -> list[int] | None:
+    """Sorted arrival latencies for one node/topic/slot, parsed with the
+    classic or partial pattern depending on the run's mode."""
+    pat = PARTIAL_PAT if run_mode(run_dir) == "partial" else CLASSIC_PAT
+    stderr = next((run_dir / "shadow.data" / "hosts" / f"node{node}").glob("*.stderr"), None)
+    if stderr is None:
+        print(f"no stderr for node {node} in {run_dir.name}")
+        return None
+    return sorted(latencies(stderr, pat, topic, slot))
+
+
+# Stable colors for the auto classic/partial overlay; extra runs cycle the palette.
+MODE_COLORS = {"classic": "#c0392b", "partial": "#2471a3"}
+PALETTE = ["#c0392b", "#2471a3", "#27ae60", "#8e44ad", "#d35400", "#16a085"]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("exp_dir", type=Path)
@@ -52,37 +68,36 @@ def main() -> None:
     ap.add_argument("--topic", type=int, default=0)
     ap.add_argument("--slot", type=int, default=2)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--runs", type=Path, nargs="+", default=None,
+                    help="explicit run dirs to overlay (default: auto-discover under exp_dir/runs)")
+    ap.add_argument("--labels", nargs="+", default=None,
+                    help="labels for --runs, in order (default: run mode / dir name)")
     args = ap.parse_args()
 
-    series = {}
-    for run_dir in sorted((args.exp_dir / "runs").iterdir()):
-        if not (run_dir / "config.yaml").exists():
-            continue
-        mode = run_mode(run_dir)
-        pat = PARTIAL_PAT if mode == "partial" else CLASSIC_PAT
-        stderr = next(
-            (run_dir / "shadow.data" / "hosts" / f"node{args.node}").glob("*.stderr"),
-            None,
-        )
-        if stderr is None:
-            print(f"no stderr for node {args.node} in {run_dir.name}")
-            continue
-        series[mode] = sorted(latencies(stderr, pat, args.topic, args.slot))
-        print(f"{mode}: {len(series[mode])} arrivals on topic {args.topic}, slot {args.slot}")
+    if args.runs:
+        run_dirs = args.runs
+        labels = args.labels or [d.name for d in run_dirs]
+        if len(labels) != len(run_dirs):
+            ap.error("--labels must match --runs in count")
+    else:
+        run_dirs = [d for d in sorted((args.exp_dir / "runs").iterdir())
+                    if (d / "config.yaml").exists()]
+        labels = [run_mode(d) for d in run_dirs]
 
-    colors = {"classic": "#c0392b", "partial": "#2471a3"}
     fig, ax = plt.subplots(figsize=(8, 5))
-    for mode in ("classic", "partial"):
-        lat = series.get(mode)
+    for i, (run_dir, label) in enumerate(zip(run_dirs, labels)):
+        lat = run_latencies(run_dir, args.node, args.topic, args.slot)
         if not lat:
             continue
+        color = MODE_COLORS.get(label, PALETTE[i % len(PALETTE)])
         n = len(lat)
-        ys = [(i + 1) / n for i in range(n)]
+        ys = [(j + 1) / n for j in range(n)]
         p50 = lat[int(0.50 * (n - 1))]
         p95 = lat[int(0.95 * (n - 1))]
-        ax.step(lat, ys, where="post", color=colors[mode], lw=2,
-                label=f"{mode}  (p50={p50} ms, p95={p95} ms)")
-        ax.axvline(p95, color=colors[mode], ls=":", lw=1, alpha=0.6)
+        ax.step(lat, ys, where="post", color=color, lw=2,
+                label=f"{label}  (p50={p50} ms, p95={p95} ms)")
+        ax.axvline(p95, color=color, ls=":", lw=1, alpha=0.6)
+        print(f"{label}: {n} arrivals on topic {args.topic}, slot {args.slot}")
 
     ax.set_xlabel("attestation arrival latency (ms)")
     ax.set_ylabel("cumulative fraction of attestations")
