@@ -1,0 +1,79 @@
+Graph diameter vs node count and mesh degree
+=============================================
+
+Random topologies from simctl/topology.py::generate_random_topology (the same
+generator the attestation sims use), with no fanout nodes. For each
+(N nodes, target degree D) we generate 10 graphs (seeds 0-9) and compute the
+EXACT diameter via all-pairs shortest paths (scipy Dijkstra).
+
+  hop diameter      = longest shortest-path in number of edges (unweighted)
+  latency diameter  = longest shortest-path in milliseconds, weighting each edge
+                      by its assigned inter-country latency (topology latency_ms)
+  mean lat          = mean over all node pairs of the shortest-path latency (ms)
+  avg deg           = realized average node degree (~= target D; node 0 is a
+                      slight hub from the connectivity pass, so it can exceed D)
+
+Values below are min / median / max across the 10 seeds.
+
+
+Full results
+------------
+
+    N   D | hop  min/med/max | latency ms  min/med/max | mean lat ms | avg deg
+  ------------------------------------------------------------------------------
+  128   4 |     6 /  6 /  7  |     374 /  387 /  455    |     171     |   4.11
+  128   8 |     4 /  4 /  4  |     287 /  303 /  317    |     108     |   7.99
+  128  12 |     3 /  3 /  3  |     252 /  284 /  299    |      94     |  11.98
+  256   4 |     7 /  7 /  8  |     423 /  446 /  481    |     199     |   4.12
+  256   8 |     4 /  4 /  5  |     314 /  330 /  339    |     119     |   8.00
+  256  12 |     4 /  4 /  4  |     287 /  300 /  315    |     102     |  11.98
+  512   4 |     7 /  8 /  8  |     449 /  476 /  525    |     217     |   4.13
+  512   8 |     5 /  5 /  5  |     336 /  341 /  377    |     128     |   8.00
+  512  12 |     4 /  4 /  4  |     309 /  318 /  322    |     110     |  11.99
+ 1000   4 |     8 /  8 /  9  |     486 /  532 /  556    |     239     |   4.12
+ 1000   8 |     5 /  5 /  5  |     348 /  356 /  373    |     136     |   8.00
+ 1000  12 |     4 /  4 /  4  |     324 /  330 /  334    |     115     |  12.00
+10000   4 |    10 / 11 / 11  |     657 /  668 /  678    |     316     |   4.12
+10000   8 |     7 /  7 /  7  |     399 /  412 /  423    |     165     |   8.01
+10000  12 |     5 /  5 /  6  |     361 /  364 /  367    |     136     |  12.00
+
+
+Median hop diameter (quick grid)
+--------------------------------
+
+    N  \  D      4     8    12
+  ----------------------------
+     128         6     4     3
+     256         7     4     4
+     512         8     5     4
+    1000         8     5     4
+   10000        11     7     5
+
+
+Median latency diameter, ms (quick grid)
+----------------------------------------
+
+    N  \  D      4     8    12
+  ----------------------------
+     128       387   303   284
+     256       446   330   300
+     512       476   341   318
+    1000       532   356   330
+   10000       668   412   364
+
+
+Notes
+-----
+- Diameter grows logarithmically in N: 1000 -> 10000 (10x nodes) adds only ~+2
+  hops at D=8 and ~+1 at D=12; latency diameter grows even slower (D=8: 356 ->
+  412 ms, +16%).
+- Mesh degree D matters far more than N. D=4 -> 12 roughly halves the hop
+  diameter; the D=4 vs D=12 latency gap widens from ~100 ms at 128 nodes to
+  ~300 ms at 10k (668 vs 364 ms) -- denser meshes pay off more at scale.
+- Latency shrinks less than hops with higher D, because each hop is a real
+  inter-country link (~50-100 ms) and crossing continents needs a few hops no
+  matter how dense the graph is.
+- The topology is not the propagation bottleneck: even at 10k nodes / D=8 the
+  worst-case geographic path is ~0.4 s, vs a 12 s slot. The rest of the
+  observed attestation latency is processing on top of geography (validation,
+  ~20 ms publish ticks, batch windows, duplicate-signature traffic).
