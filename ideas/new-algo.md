@@ -23,3 +23,10 @@
 
 - We can keep the D_Push mesh entirely dependent on farther nodes.
 - Heavy D_Pull mesh with the closer nodes.   
+
+## Will this improve the situation? 
+
+- There's a priority over the sends. For every message in our outbound queue: 
+    - (topic_id, msg_id) => priority
+- We keep 10 outbound items going in parallel.  
+
