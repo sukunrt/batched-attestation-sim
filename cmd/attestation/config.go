@@ -36,6 +36,13 @@ type SimConfig struct {
 
 	// Partial-messages path (lists of attestor IDs + ephemeral iwant).
 	UsePartialMessages bool `yaml:"use_partial_messages"`
+
+	// Partial-priority path: size-capped, least-forwarded-first forwarding.
+	// An alternative to the default partial push, over the same libp2p
+	// partial-messages extension. MaxAttestationsPerMessage caps attestations
+	// per outgoing data message (0 = default).
+	PartialPriorityMode       bool `yaml:"partial_priority"`
+	MaxAttestationsPerMessage int  `yaml:"max_attestations_per_message"`
 }
 
 func (s *SimConfig) PublishInterval() time.Duration {
@@ -50,6 +57,13 @@ func (s *SimConfig) EffectiveMaxPeersPerAttestation() int {
 		return s.GossipsubParams.D * 2
 	}
 	return s.MaxPeersPerAttestation
+}
+
+func (s *SimConfig) EffectiveMaxAttestationsPerMessage() int {
+	if s.MaxAttestationsPerMessage <= 0 {
+		return node.MaxAttestationsPerMessage
+	}
+	return s.MaxAttestationsPerMessage
 }
 
 func (s *SimConfig) BandwidthLogFrequency() time.Duration {

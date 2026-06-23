@@ -64,8 +64,10 @@ def pick_node(exp_dir: Path, country: str | None, rng: random.Random) -> int:
 
 
 def run_mode(run_dir: Path) -> str:
-    cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
-    return "partial" if cfg["simulation"].get("use_partial_messages") else "classic"
+    sim = yaml.safe_load((run_dir / "config.yaml").read_text())["simulation"]
+    if sim.get("partial_priority"):
+        return "partial-priority"
+    return "partial" if sim.get("use_partial_messages") else "classic"
 
 
 def node_latencies(run_dir: Path, node: int, committee: int, slot: int) -> np.ndarray:
@@ -73,8 +75,10 @@ def node_latencies(run_dir: Path, node: int, committee: int, slot: int) -> np.nd
     sf = next(Path(f"{run_dir}/shadow.data/hosts/node{node}").glob("*.stderr"), None)
     if sf is None:
         return np.array([])
-    pat = PARTIAL_PAT if mode == "partial" else CLASSIC_PAT
-    lat_idx = 4 if mode == "partial" else 3
+    # partial-priority emits the same partial_received lines as partial.
+    is_partial = mode in ("partial", "partial-priority")
+    pat = PARTIAL_PAT if is_partial else CLASSIC_PAT
+    lat_idx = 4 if is_partial else 3
     out = [int(m.group(lat_idx)) for ln in open(sf, errors="replace")
            if (m := pat.search(ln)) and int(m.group(1)) == slot and int(m.group(2)) == committee]
     return np.array(sorted(out))
@@ -127,9 +131,10 @@ def main():
         plt.plot(x, y, color=col, lw=1.4, alpha=0.9,
                  label=f"mainnet slot {slot_label(path)} (n={len(a)})")
 
-    # Our sim — bold black, solid=classic, dashed=partial.
+    # Our sim — bold black, solid=classic, dashed=partial, dotted=partial-priority.
     styles = {"classic": dict(color="black", lw=2.6, ls="-"),
-              "partial": dict(color="black", lw=2.6, ls="--")}
+              "partial": dict(color="black", lw=2.6, ls="--"),
+              "partial-priority": dict(color="black", lw=2.6, ls=":")}
     for rd in runs:
         mode = run_mode(rd)
         lat = node_latencies(rd, node, args.committee, args.slot)

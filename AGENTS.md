@@ -158,6 +158,35 @@ disable_ihave_gossip: false
 
 Do not set `disable_ihave_gossip: true` unless the user wants the no-IHAVE variant.
 
+### Partial-Priority Messages
+
+`partial-priority` is a second, independent partial-message forwarding strategy, selected with:
+
+```yaml
+partial_priority: true
+max_attestations_per_message: 30  # optional, default 30 (the per-message size cap N)
+```
+
+It is a drop-in alternative to partial mode over the same libp2p partial-messages extension (same
+wire types, same `RequestPartialMessages`, IHAVE/IWANT gossip as usual, same receive/validation
+path). The **only** behavioral divergence is the per-peer send: instead of one large push per peer
+per tick, each peer is sent the least-forwarded validated attestations it lacks, drawn across all
+buckets in `sendCount` order and split into several ≤ N-sized data messages (one libp2p RPC each).
+The gossip `available`/`requests` advertisement is its own separate metadata-only message. Nothing
+sendable is dropped — N caps message size, not per-tick volume; `max_peers_per_attestation` stays
+the only volume throttle (the per-position lifetime ceiling), so set it generously (≥ D).
+
+Implementation: `cmd/attestation/node/partial_priority.go` (`priorityAttestationManager`). It
+**reuses** partial.go's data model (`AttestationState`, `peerState`, `peerAttestationState`,
+`PartialAttestationEntry`) and pure helpers (`getAttestationMetadata`, `selectIWantTargets`,
+`newCommitteeBitmap`, `slotGroupID`, …); only the manager, the `prioritySlotState` (which adds a
+`sendCount`-bucketed index for O(1) priority ordering), the send selection, and the
+index-maintaining methods are new. `partial.go` is untouched. `node.go` routes to it via the
+`partialManager` interface and `Node.PartialPriorityMode`; `Node` holds the two managers as
+separate fields so tests can reach each one's internals. partial-priority emits the **same**
+log/wire keys as partial mode, so analysis parsing is unchanged — only mode detection learns the
+third mode (`partial_priority` in config ⇒ `"partial-priority"`).
+
 ### Partial-mode log keys
 
 Structured slog lines emitted by partial mode (use `att_digest` — the hex-encoded

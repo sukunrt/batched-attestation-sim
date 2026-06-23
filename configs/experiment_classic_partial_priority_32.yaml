@@ -1,0 +1,93 @@
+# Experiment: classic gossipsub vs partial messages vs partial-priority.
+# Shared uniform (non-tiered) topology:
+#   - 32 mesh nodes, no fanout, no bandwidth tiers (super_node_fraction=0)
+#   - 1 topic, 32 attestors per slot (every mesh node attests)
+#   - uniform gossipsub D=8
+# The three arms differ only in forwarding strategy (and N for the priority arm).
+
+topology:
+  num_nodes: 32
+  degree: 16          # ~16 peers/node: room for a D=8 mesh plus gossip peers
+  type: random
+  seed: 42
+  super_node_fraction: 0.0   # homogeneous bandwidth (not tiered)
+  fanout_nodes_per_topic: 0
+  fanout_node_mesh_peers: 1
+  latency_multiple: 1.0
+  min_node_to_node_latency_ms: 0
+
+simulations:
+  # 1. Classic gossipsub (full attestation messages)
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 1
+    num_slots: 4
+    slot_duration_seconds: 6
+    num_attestors: 32
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    publish_delay_mean_ms: 0
+    stop_time_minutes: 4.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    divergent_attestor_fraction: 0.0
+    disable_ihave_gossip: false
+    use_partial_messages: false
+
+  # 2. Partial messages (one large push per peer per tick)
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 1
+    num_slots: 4
+    slot_duration_seconds: 6
+    num_attestors: 32
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    publish_delay_mean_ms: 0
+    stop_time_minutes: 4.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    divergent_attestor_fraction: 0.0
+    disable_ihave_gossip: false
+    use_partial_messages: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0   # 0 => D*2 = 16
+
+  # 3. Partial-priority (size-capped, least-forwarded-first; small N to make
+  #    the chunked/priority behavior visible at 32 attestors)
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 1
+    num_slots: 4
+    slot_duration_seconds: 6
+    num_attestors: 32
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    publish_delay_mean_ms: 0
+    stop_time_minutes: 4.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    divergent_attestor_fraction: 0.0
+    disable_ihave_gossip: false
+    partial_priority: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0   # 0 => D*2 = 16
+    max_attestations_per_message: 8

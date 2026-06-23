@@ -15,6 +15,7 @@ import (
 	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p-pubsub/partialmessages"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
@@ -76,6 +77,13 @@ type Node struct {
 	MaxPeersPerAttestation    int
 	DivergentAttestorFraction float64
 	PublishInterval           time.Duration
+
+	// PartialPriorityMode selects the partial-priority forwarding strategy
+	// (size-capped, least-forwarded-first) instead of the default partial
+	// push. MaxAttestationsPerMessage caps attestations per outgoing data
+	// message (0 = default 30). Only meaningful when partial messages are on.
+	PartialPriorityMode       bool
+	MaxAttestationsPerMessage int
 	// CommitteeSize is the wire-level capacity for attestor bitmaps. All
 	// committees share the same size (= num_attestors per topic).
 	CommitteeSize int
@@ -87,12 +95,42 @@ type Node struct {
 	// SlotDuration is the duration of each simulation slot.
 	SlotDuration time.Duration
 
-	logger   *slog.Logger
-	ps       *pubsub.PubSub
-	verifier *batchVerifier
-	topics   []*pubsub.Topic
-	subs     []*pubsub.Subscription
-	partial  *partialAttestationManager
+	logger          *slog.Logger
+	ps              *pubsub.PubSub
+	verifier        *batchVerifier
+	topics          []*pubsub.Topic
+	subs            []*pubsub.Subscription
+	partial         *partialAttestationManager
+	partialPriority *priorityAttestationManager
+}
+
+// partialManager is the runtime surface both partial-message strategies share.
+// Its methods don't expose the per-peer generic state, so a single dispatch
+// point routes the publish loop, fanout, self-publish, and extension install to
+// whichever strategy is active. Test helpers still reach the concrete managers
+// (n.partial / n.partialPriority) for their internal state.
+type partialManager interface {
+	runPublishLoop(ctx interface{ Done() <-chan struct{} }, ps *pubsub.PubSub, topics []string)
+	fanoutPublish(ps *pubsub.PubSub, topic string, slot, position int, signature, data []byte)
+	publishLocal(topic string, slot, position int, sig, data []byte)
+	newPartialMessagesExtension() *partialmessages.PartialMessagesExtension[peerState]
+}
+
+// partialModeActive reports whether either partial-message strategy is enabled.
+func (n *Node) partialModeActive() bool {
+	return n.UsePartialMessages || n.PartialPriorityMode
+}
+
+// activePartialManager returns the partial-message strategy in use, or nil when
+// neither is enabled.
+func (n *Node) activePartialManager() partialManager {
+	if n.partialPriority != nil {
+		return n.partialPriority
+	}
+	if n.partial != nil {
+		return n.partial
+	}
+	return nil
 }
 
 // Start brings the node up. ctx is used as the pubsub lifecycle context;
@@ -139,9 +177,16 @@ func (n *Node) Start(ctx context.Context) {
 		topicIndexMap[topicName(i)] = i
 	}
 
-	if n.UsePartialMessages {
+	// partial-priority takes precedence: it is a drop-in alternative strategy
+	// over the same libp2p partial-messages extension.
+	switch {
+	case n.PartialPriorityMode:
+		n.partialPriority = newPriorityAttestationManager(n, n.PublishStart, n.SlotDuration, topicIndexMap)
+	case n.UsePartialMessages:
 		n.partial = newPartialAttestationManager(n, n.PublishStart, n.SlotDuration, topicIndexMap)
-		opts = append(opts, pubsub.WithPartialMessagesExtension(n.partial.newPartialMessagesExtension()))
+	}
+	if pm := n.activePartialManager(); pm != nil {
+		opts = append(opts, pubsub.WithPartialMessagesExtension(pm.newPartialMessagesExtension()))
 	}
 	ps, err := pubsub.NewGossipSub(ctx, n.Host, opts...)
 	if err != nil {
@@ -174,7 +219,7 @@ func (n *Node) JoinTopics() {
 	joinOne := func(name string, subscribe bool) {
 		// Only register topic validator for non-partial mode.
 		// In partial mode, validation is handled by the partial message manager.
-		if !n.UsePartialMessages {
+		if !n.partialModeActive() {
 			err := n.ps.RegisterTopicValidator(name, func(_ context.Context, _ peer.ID, _ *pubsub.Message) pubsub.ValidationResult {
 				n.verifier.submitAndWait(verificationItem{Attestations: []any{nil}})
 				return pubsub.ValidationAccept
@@ -185,7 +230,7 @@ func (n *Node) JoinTopics() {
 		}
 
 		var topicOpts []pubsub.TopicOpt
-		if n.UsePartialMessages {
+		if n.partialModeActive() {
 			topicOpts = append(topicOpts, pubsub.RequestPartialMessages())
 		}
 		topic, err := n.ps.Join(name, topicOpts...)
@@ -246,7 +291,7 @@ func (n *Node) ConnectToPeers(peers []int) {
 // In parallel, it publishes to the topic if slotNum is in
 // its publishSlots; payload is AttestationDataSize + SignatureSize bytes.
 func (n *Node) Run(numSlots int, slotDuration time.Duration) {
-	if n.UsePartialMessages {
+	if n.partialModeActive() {
 		n.runPartial(numSlots, slotDuration)
 		return
 	}
@@ -382,7 +427,7 @@ func (n *Node) runPartial(numSlots int, slotDuration time.Duration) {
 		for _, t := range n.topics {
 			topicNames = append(topicNames, t.String())
 		}
-		go n.partial.runPublishLoop(ctx, n.ps, topicNames)
+		go n.activePartialManager().runPublishLoop(ctx, n.ps, topicNames)
 	}
 
 	for slot := 1; slot <= numSlots; slot++ {
@@ -422,9 +467,9 @@ func (n *Node) selfPublish(slot int) {
 		data := n.attestationDataForSlot(slot, topicName)
 		digest := attDigest(data)
 		if n.Fanout {
-			n.partial.fanoutPublish(n.ps, topicName, slot, m.Position, sig, data)
+			n.activePartialManager().fanoutPublish(n.ps, topicName, slot, m.Position, sig, data)
 		} else {
-			n.partial.publishLocal(topicName, slot, m.Position, sig, data)
+			n.activePartialManager().publishLocal(topicName, slot, m.Position, sig, data)
 		}
 		n.logger.Info("self_published",
 			"slot", slot,

@@ -83,6 +83,8 @@ def _sim_params_to_config(
             validation_batch_window_ms=params.validation_batch_window_ms,
             per_attestation_validation_us=params.per_attestation_validation_us,
             use_partial_messages=params.use_partial_messages,
+            partial_priority=params.partial_priority,
+            max_attestations_per_message=params.max_attestations_per_message,
         )
     )
 

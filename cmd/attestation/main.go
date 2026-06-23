@@ -40,6 +40,8 @@ func main() {
 		disableIHaveGossip   = flag.Bool("disable-ihave-gossip", false, "Disable IHAVE gossip")
 		committeeMemberships = flag.String("committee-memberships", "", "Semicolon-separated topic:position pairs, e.g. 0:7;1:42")
 		usePartialMessages   = flag.Bool("use-partial-messages", false, "Use partial messages (list of attestor IDs + ephemeral iwant)")
+		partialPriority      = flag.Bool("partial-priority", false, "Use partial-priority forwarding (size-capped, least-forwarded-first)")
+		maxAttsPerMessage    = flag.Int("max-attestations-per-message", 0, "Max attestations per outgoing partial-priority data message (0 = default)")
 		gossipsubParams      = flag.String("gossipsub-params", "", "Per-node gossipsub mesh override, e.g. Dlow:8,D:12,Dhigh:16; empty uses the config value")
 	)
 	flag.Parse()
@@ -58,6 +60,9 @@ func main() {
 		}
 		sim.GossipsubParams = p
 	}
+	if *maxAttsPerMessage > 0 {
+		sim.MaxAttestationsPerMessage = *maxAttsPerMessage
+	}
 
 	publishSlots := make(map[int]struct{})
 	for _, s := range parseIntList(*publishSlotsStr) {
@@ -72,6 +77,7 @@ func main() {
 	}
 
 	usePartial := *usePartialMessages || sim.UsePartialMessages
+	usePriority := *partialPriority || sim.PartialPriorityMode
 	memberships := parseCommitteeMemberships(*committeeMemberships)
 	for _, m := range memberships {
 		if m.TopicIndex < 0 || m.TopicIndex >= numTopics {
@@ -98,6 +104,8 @@ func main() {
 		Tracer:                     node.NewSlogTracer(*nodeNum),
 		RPCTracer:                  node.NewStderrRPCTracer(fmt.Sprintf("node%d", *nodeNum), node.MessageIDFunc),
 		UsePartialMessages:         usePartial,
+		PartialPriorityMode:        usePriority,
+		MaxAttestationsPerMessage:  sim.EffectiveMaxAttestationsPerMessage(),
 		AttestationDataSize:        sim.AttestationDataSize,
 		SignatureSize:              sim.SignatureSize,
 		MaxPeersPerAttestation:     sim.EffectiveMaxPeersPerAttestation(),

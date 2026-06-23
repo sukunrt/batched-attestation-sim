@@ -124,6 +124,13 @@ class AttestationSimConfig(BaseModel):
     # Partial-messages path (lists of attestor IDs + ephemeral iwant)
     use_partial_messages: bool = False
 
+    # Partial-priority path: size-capped, least-forwarded-first forwarding.
+    # An alternative to the default partial push, over the same partial-messages
+    # extension. max_attestations_per_message caps attestations per outgoing
+    # data message (0 = default 30).
+    partial_priority: bool = False
+    max_attestations_per_message: int = 30
+
 
 class AttestationConfig(BaseModel):
     """Root configuration for an attestation run."""
@@ -170,6 +177,13 @@ class AttestationSimParams(BaseModel):
 
     # Partial-messages path (lists of attestor IDs + ephemeral iwant)
     use_partial_messages: bool = False
+
+    # Partial-priority path: size-capped, least-forwarded-first forwarding.
+    # An alternative to the default partial push, over the same partial-messages
+    # extension. max_attestations_per_message caps attestations per outgoing
+    # data message (0 = default 30).
+    partial_priority: bool = False
+    max_attestations_per_message: int = 30
 
 
 class AttestationExperimentConfig(BaseModel):

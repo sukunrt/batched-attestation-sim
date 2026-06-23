@@ -206,6 +206,11 @@ def generate_shadow_yaml(
             args_parts.append("-disable-ihave-gossip")
         if config.use_partial_messages:
             args_parts.append("-use-partial-messages")
+        if config.partial_priority:
+            args_parts.append("-partial-priority")
+            args_parts.append(
+                f"-max-attestations-per-message={config.max_attestations_per_message}"
+            )
 
         node_memberships = memberships.get(node_num, [])
         if node_memberships:

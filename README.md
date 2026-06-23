@@ -143,14 +143,34 @@ disable_ihave_gossip: false
 
 Set `disable_ihave_gossip: true` only for a no-IHAVE variant.
 
+### Partial-priority forwarding
+
+`partial-priority` is a second partial-message forwarding strategy. It keeps every outgoing data
+message small and pushes the least-forwarded attestations first: instead of one large push per peer
+per tick, each peer is sent several small data messages (≤ `max_attestations_per_message`
+attestations each, default 30), ordered so scarce (under-propagated) attestations go out first.
+Nothing sendable is dropped — the cap is a per-message size, not a per-tick throttle. It runs over
+the same libp2p partial-messages extension and keeps IHAVE/IWANT gossip as usual. Enable it with:
+
+```yaml
+partial_priority: true
+max_attestations_per_message: 30  # optional, default 30
+```
+
+It is a drop-in alternative to partial mode, so experiments can compare classic vs partial vs
+partial-priority the same way classic-vs-partial is compared today. Set `max_peers_per_attestation`
+generously (≥ D) in partial-priority configs — it stays the only volume throttle (the per-position
+lifetime ceiling).
+
 ## Analysis
 
 `analysis/prelim-analysis.py <run-or-experiment-dir>` prints time-to-receive latency percentiles
 and a received-bytes breakdown (attestation data, signatures, and control), scoped to the last
-slot. With a single mesh degree it compares classic vs partial; when an experiment mixes tiered-D
-and uniform-D variants it compares uniform-D vs tiered-D within each mode.
+slot. With a single mesh degree it compares classic against each partial variant present (partial
+and/or partial-priority); when an experiment mixes tiered-D and uniform-D variants it compares
+uniform-D vs tiered-D within each mode.
 
-`analysis/plot_arrival_latency_cdf.py` (single node, classic vs partial) and
+`analysis/plot_arrival_latency_cdf.py` (single node, classic vs partial vs partial-priority) and
 `analysis/plot_arrival_delays_cdf.py` (sim vs mainnet) write arrival-delay CDF plots to `graphs/`.
 Pass `--runs <dir> <dir> --labels <a> <b>` to overlay any two run directories (for example
 tiered-D vs uniform-D).

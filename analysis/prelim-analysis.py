@@ -224,7 +224,12 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
 
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
     sim = cfg["simulation"]
-    mode = "partial" if sim.get("use_partial_messages") else "classic"
+    if sim.get("partial_priority"):
+        mode = "partial-priority"
+    elif sim.get("use_partial_messages"):
+        mode = "partial"
+    else:
+        mode = "classic"
     tier = "tiered" if (sim.get("supernode_d") or sim.get("homenode_d")) else "uniform"
     last_slot = int(sim.get("num_slots", 1))
 
@@ -277,8 +282,9 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
             d = {k: 0.0 for k in keys}
         else:
             d = {k: sum(node_bw[n][k] for n in nodes) / len(nodes) for k in keys}
-        # Control received = IHAVE+IWANT in classic, parts metadata in partial.
-        if mode == "partial":
+        # Control received = IHAVE+IWANT in classic, parts metadata in the
+        # partial variants (partial and partial-priority).
+        if mode in ("partial", "partial-priority"):
             d["control_recv"] = d["md_recv"]
         else:
             d["control_recv"] = d["ihave_recv"] + d["iwant_recv"]
@@ -332,12 +338,16 @@ def main():
                 print(f"=== {mode}: uniform-D vs tiered-D ===\n")
                 print_comparison(base, f"{mode}/uniform", tiered, f"{mode}/tiered")
     else:
-        # Single-tier experiment: fall back to classic-vs-partial.
+        # Single-tier experiment: compare classic against each non-classic mode
+        # present (partial and/or partial-priority).
         tier = next(iter(tiers), None)
         classic = results.get(("classic", tier))
-        partial = results.get(("partial", tier))
-        if classic and partial:
-            print_comparison(classic, "classic", partial, "partial")
+        for mode in modes:
+            if mode == "classic":
+                continue
+            other = results.get((mode, tier))
+            if classic and other:
+                print_comparison(classic, "classic", other, mode)
 
 
 def print_table(title: str, headers: list[str], rows: list[list[str]]):
