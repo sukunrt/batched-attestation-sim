@@ -190,22 +190,32 @@ func (m *Manager) ConnectPeer(p peer.ID) {
 }
 
 // Run launches the eventloop and the tick/floor/heartbeat timer drivers, then
-// blocks until ctx is cancelled. Implemented by the Core agent in eventloop.go.
+// blocks until ctx is cancelled (§F4). A fanout node has no eventloop — it only
+// installs the reset handlers (it never receives) and returns once ctx is done.
 func (m *Manager) Run(ctx context.Context) {
-	panic("TODO: Core — eventloop.go")
+	if m.cfg.Fanout {
+		m.installFanoutResetHandlers()
+		<-ctx.Done()
+		return
+	}
+	go m.driveTimer(ctx, m.cfg.TickInterval, func() event { return tickEvent{} })
+	go m.driveTimer(ctx, m.cfg.BitmapFloorInterval, func() event { return bitmapFloorEvent{} })
+	go m.driveTimer(ctx, m.cfg.HeartbeatInterval, func() event { return heartbeatEvent{} })
+	m.run(ctx)
 }
 
 // PublishLocal injects this mesh node's own attestation into local state as
-// validated and schedules it for forwarding. Implemented by the Core agent.
+// validated. It posts a publishLocalEvent so the injection happens on the
+// eventloop goroutine, preserving single-owner discipline (§F4).
 func (m *Manager) PublishLocal(topic string, slot, pos int, sig, data []byte) {
-	panic("TODO: Core — eventloop.go / state.go")
+	m.post(publishLocalEvent{topic: topic, slot: slot, pos: pos, sig: sig, data: data})
 }
 
 // FanoutPublish injects a fanout (originator) node's single attestation: opens
 // a push stream to each configured peer and sends one BatchedAttestation, then
-// resets any inbound stream (§G1). Implemented by the Core agent in fanout.go.
+// resets any inbound stream (§G1). Implemented in fanout.go.
 func (m *Manager) FanoutPublish(topic string, slot, pos int, sig, data []byte) {
-	panic("TODO: Core — fanout.go")
+	m.fanoutPublish(topic, slot, pos, sig, data)
 }
 
 // topicIdxOf resolves a topic name to its stable index, or -1 if unknown.
