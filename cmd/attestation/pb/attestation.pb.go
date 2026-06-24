@@ -21,6 +21,105 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// AttPropMeshOp is the graft/prune operation for the att_propagation control
+// stream.
+type AttPropMeshOp int32
+
+const (
+	AttPropMeshOp_GRAFT AttPropMeshOp = 0
+	AttPropMeshOp_PRUNE AttPropMeshOp = 1
+)
+
+// Enum value maps for AttPropMeshOp.
+var (
+	AttPropMeshOp_name = map[int32]string{
+		0: "GRAFT",
+		1: "PRUNE",
+	}
+	AttPropMeshOp_value = map[string]int32{
+		"GRAFT": 0,
+		"PRUNE": 1,
+	}
+)
+
+func (x AttPropMeshOp) Enum() *AttPropMeshOp {
+	p := new(AttPropMeshOp)
+	*p = x
+	return p
+}
+
+func (x AttPropMeshOp) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AttPropMeshOp) Descriptor() protoreflect.EnumDescriptor {
+	return file_attestation_proto_enumTypes[0].Descriptor()
+}
+
+func (AttPropMeshOp) Type() protoreflect.EnumType {
+	return &file_attestation_proto_enumTypes[0]
+}
+
+func (x AttPropMeshOp) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AttPropMeshOp.Descriptor instead.
+func (AttPropMeshOp) EnumDescriptor() ([]byte, []int) {
+	return file_attestation_proto_rawDescGZIP(), []int{0}
+}
+
+// AttPropMesh names which mesh a control item applies to. FULL means both the
+// push and bitmap meshes (used by prune-with-backoff).
+type AttPropMesh int32
+
+const (
+	AttPropMesh_PUSH   AttPropMesh = 0
+	AttPropMesh_BITMAP AttPropMesh = 1
+	AttPropMesh_FULL   AttPropMesh = 2
+)
+
+// Enum value maps for AttPropMesh.
+var (
+	AttPropMesh_name = map[int32]string{
+		0: "PUSH",
+		1: "BITMAP",
+		2: "FULL",
+	}
+	AttPropMesh_value = map[string]int32{
+		"PUSH":   0,
+		"BITMAP": 1,
+		"FULL":   2,
+	}
+)
+
+func (x AttPropMesh) Enum() *AttPropMesh {
+	p := new(AttPropMesh)
+	*p = x
+	return p
+}
+
+func (x AttPropMesh) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AttPropMesh) Descriptor() protoreflect.EnumDescriptor {
+	return file_attestation_proto_enumTypes[1].Descriptor()
+}
+
+func (AttPropMesh) Type() protoreflect.EnumType {
+	return &file_attestation_proto_enumTypes[1]
+}
+
+func (x AttPropMesh) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AttPropMesh.Descriptor instead.
+func (AttPropMesh) EnumDescriptor() ([]byte, []int) {
+	return file_attestation_proto_rawDescGZIP(), []int{1}
+}
+
 // Attestation is the classic-mode message: one attestation per Publish.
 type Attestation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -325,6 +424,105 @@ func (x *BatchedAttestationEnvelope) GetBatches() []*BatchedAttestation {
 	return nil
 }
 
+// AttPropControlItem is one graft/prune instruction on the att_propagation
+// control stream: operation (graft/prune) on a given mesh (push/bitmap/full).
+type AttPropControlItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Op            AttPropMeshOp          `protobuf:"varint,1,opt,name=op,proto3,enum=attestation.AttPropMeshOp" json:"op,omitempty"`
+	Mesh          AttPropMesh            `protobuf:"varint,2,opt,name=mesh,proto3,enum=attestation.AttPropMesh" json:"mesh,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttPropControlItem) Reset() {
+	*x = AttPropControlItem{}
+	mi := &file_attestation_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttPropControlItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttPropControlItem) ProtoMessage() {}
+
+func (x *AttPropControlItem) ProtoReflect() protoreflect.Message {
+	mi := &file_attestation_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttPropControlItem.ProtoReflect.Descriptor instead.
+func (*AttPropControlItem) Descriptor() ([]byte, []int) {
+	return file_attestation_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AttPropControlItem) GetOp() AttPropMeshOp {
+	if x != nil {
+		return x.Op
+	}
+	return AttPropMeshOp_GRAFT
+}
+
+func (x *AttPropControlItem) GetMesh() AttPropMesh {
+	if x != nil {
+		return x.Mesh
+	}
+	return AttPropMesh_PUSH
+}
+
+// AttPropControl wraps the graft/prune items sent in one control RPC.
+type AttPropControl struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*AttPropControlItem  `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttPropControl) Reset() {
+	*x = AttPropControl{}
+	mi := &file_attestation_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttPropControl) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttPropControl) ProtoMessage() {}
+
+func (x *AttPropControl) ProtoReflect() protoreflect.Message {
+	mi := &file_attestation_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttPropControl.ProtoReflect.Descriptor instead.
+func (*AttPropControl) Descriptor() ([]byte, []int) {
+	return file_attestation_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AttPropControl) GetItems() []*AttPropControlItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
 var File_attestation_proto protoreflect.FileDescriptor
 
 const file_attestation_proto_rawDesc = "" +
@@ -349,7 +547,20 @@ const file_attestation_proto_rawDesc = "" +
 	"\x0fControlEnvelope\x12L\n" +
 	"\tmetadatas\x18\x01 \x03(\v2..attestation.CommitteeAttestationPartsMetadataR\tmetadatas\"W\n" +
 	"\x1aBatchedAttestationEnvelope\x129\n" +
-	"\abatches\x18\x01 \x03(\v2\x1f.attestation.BatchedAttestationR\abatchesB-Z+github.com/ethp2p/simlab/cmd/attestation/pbb\x06proto3"
+	"\abatches\x18\x01 \x03(\v2\x1f.attestation.BatchedAttestationR\abatches\"n\n" +
+	"\x12AttPropControlItem\x12*\n" +
+	"\x02op\x18\x01 \x01(\x0e2\x1a.attestation.AttPropMeshOpR\x02op\x12,\n" +
+	"\x04mesh\x18\x02 \x01(\x0e2\x18.attestation.AttPropMeshR\x04mesh\"G\n" +
+	"\x0eAttPropControl\x125\n" +
+	"\x05items\x18\x01 \x03(\v2\x1f.attestation.AttPropControlItemR\x05items*%\n" +
+	"\rAttPropMeshOp\x12\t\n" +
+	"\x05GRAFT\x10\x00\x12\t\n" +
+	"\x05PRUNE\x10\x01*-\n" +
+	"\vAttPropMesh\x12\b\n" +
+	"\x04PUSH\x10\x00\x12\n" +
+	"\n" +
+	"\x06BITMAP\x10\x01\x12\b\n" +
+	"\x04FULL\x10\x02B-Z+github.com/ethp2p/simlab/cmd/attestation/pbb\x06proto3"
 
 var (
 	file_attestation_proto_rawDescOnce sync.Once
@@ -363,22 +574,30 @@ func file_attestation_proto_rawDescGZIP() []byte {
 	return file_attestation_proto_rawDescData
 }
 
-var file_attestation_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_attestation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_attestation_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_attestation_proto_goTypes = []any{
-	(*Attestation)(nil),                       // 0: attestation.Attestation
-	(*BatchedAttestation)(nil),                // 1: attestation.BatchedAttestation
-	(*CommitteeAttestationPartsMetadata)(nil), // 2: attestation.CommitteeAttestationPartsMetadata
-	(*ControlEnvelope)(nil),                   // 3: attestation.ControlEnvelope
-	(*BatchedAttestationEnvelope)(nil),        // 4: attestation.BatchedAttestationEnvelope
+	(AttPropMeshOp)(0),                        // 0: attestation.AttPropMeshOp
+	(AttPropMesh)(0),                          // 1: attestation.AttPropMesh
+	(*Attestation)(nil),                       // 2: attestation.Attestation
+	(*BatchedAttestation)(nil),                // 3: attestation.BatchedAttestation
+	(*CommitteeAttestationPartsMetadata)(nil), // 4: attestation.CommitteeAttestationPartsMetadata
+	(*ControlEnvelope)(nil),                   // 5: attestation.ControlEnvelope
+	(*BatchedAttestationEnvelope)(nil),        // 6: attestation.BatchedAttestationEnvelope
+	(*AttPropControlItem)(nil),                // 7: attestation.AttPropControlItem
+	(*AttPropControl)(nil),                    // 8: attestation.AttPropControl
 }
 var file_attestation_proto_depIdxs = []int32{
-	2, // 0: attestation.ControlEnvelope.metadatas:type_name -> attestation.CommitteeAttestationPartsMetadata
-	1, // 1: attestation.BatchedAttestationEnvelope.batches:type_name -> attestation.BatchedAttestation
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	4, // 0: attestation.ControlEnvelope.metadatas:type_name -> attestation.CommitteeAttestationPartsMetadata
+	3, // 1: attestation.BatchedAttestationEnvelope.batches:type_name -> attestation.BatchedAttestation
+	0, // 2: attestation.AttPropControlItem.op:type_name -> attestation.AttPropMeshOp
+	1, // 3: attestation.AttPropControlItem.mesh:type_name -> attestation.AttPropMesh
+	7, // 4: attestation.AttPropControl.items:type_name -> attestation.AttPropControlItem
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_attestation_proto_init() }
@@ -391,13 +610,14 @@ func file_attestation_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_attestation_proto_rawDesc), len(file_attestation_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   5,
+			NumEnums:      2,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_attestation_proto_goTypes,
 		DependencyIndexes: file_attestation_proto_depIdxs,
+		EnumInfos:         file_attestation_proto_enumTypes,
 		MessageInfos:      file_attestation_proto_msgTypes,
 	}.Build()
 	File_attestation_proto = out.File

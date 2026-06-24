@@ -51,3 +51,30 @@ message ControlEnvelope {
 message BatchedAttestationEnvelope {
   repeated BatchedAttestation batches = 1;
 }
+
+// AttPropMeshOp is the graft/prune operation for the att_propagation control
+// stream.
+enum AttPropMeshOp {
+  GRAFT = 0;
+  PRUNE = 1;
+}
+
+// AttPropMesh names which mesh a control item applies to. FULL means both the
+// push and bitmap meshes (used by prune-with-backoff).
+enum AttPropMesh {
+  PUSH   = 0;
+  BITMAP = 1;
+  FULL   = 2;
+}
+
+// AttPropControlItem is one graft/prune instruction on the att_propagation
+// control stream: operation (graft/prune) on a given mesh (push/bitmap/full).
+message AttPropControlItem {
+  AttPropMeshOp op   = 1;
+  AttPropMesh   mesh = 2;
+}
+
+// AttPropControl wraps the graft/prune items sent in one control RPC.
+message AttPropControl {
+  repeated AttPropControlItem items = 1;
+}
