@@ -20,6 +20,10 @@ import (
 // budget, committee 64. Timer intervals are left zero so driveTimer is a no-op;
 // tests post tick/floor/heartbeat events by hand for determinism.
 func intgCfg(fanout bool) Config {
+	return intgCfgWithTopics(fanout, []string{"t0"})
+}
+
+func intgCfgWithTopics(fanout bool, topics []string) Config {
 	c := testCfg()
 	// Debug-level logger to a discard writer: keeps test output clean while still
 	// exercising every log call. Swap io.Discard for os.Stderr to debug.
@@ -28,7 +32,7 @@ func intgCfg(fanout bool) Config {
 		w = os.Stderr
 	}
 	c.Logger = slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	c.Topics = []string{"t0"}
+	c.Topics = topics
 	c.CommitteeSize = testCommittee
 	c.SendBudgetB = 4
 	c.MaxAttsPerMessage = 30
@@ -86,6 +90,17 @@ func orderedPair() (int, int) {
 func newHarness(
 	t *testing.T, ctx context.Context, count int, fanout func(int) bool, tracers map[int]Tracer,
 ) *harness {
+	return newHarnessWithTopics(t, ctx, count, fanout, tracers, []string{"t0"})
+}
+
+func newHarnessWithTopics(
+	t *testing.T,
+	ctx context.Context,
+	count int,
+	fanout func(int) bool,
+	tracers map[int]Tracer,
+	topics []string,
+) *harness {
 	t.Helper()
 	sn := newSimNet(t, count)
 	h := &harness{sn: sn, managers: make([]*Manager, count)}
@@ -97,7 +112,7 @@ func newHarness(
 		if tracers != nil {
 			tr = tracers[i]
 		}
-		m := New(sn.hosts[i], v, tr, intgCfg(fanout(i)))
+		m := New(sn.hosts[i], v, tr, intgCfgWithTopics(fanout(i), topics))
 		m.Start(ctx)
 		h.managers[i] = m
 		if !fanout(i) {
@@ -125,8 +140,12 @@ func (m *Manager) onLoop(fn func()) {
 	<-done
 }
 
-// forceRole sets a peer's mesh role on the eventloop goroutine.
-func (m *Manager) forceRole(p peer.ID, r meshRole) { m.onLoop(func() { m.mesh.roles[p] = r }) }
+func (m *Manager) forceTopicRole(topicIdx int, p peer.ID, r meshRole) {
+	m.onLoop(func() { m.mesh(topicIdx).roles[p] = r })
+}
+
+// forceRole sets a topic-0 peer's mesh role on the eventloop goroutine.
+func (m *Manager) forceRole(p peer.ID, r meshRole) { m.forceTopicRole(0, p, r) }
 
 // TestFanoutInjectAndReset exercises §G1: a fanout node injects its single
 // attestation to its connected peer (the mesh node receives + validates it), and
@@ -211,13 +230,49 @@ func TestEndToEndPushForward(t *testing.T) {
 		// After delivery, A must hold no in-flight send to B (Write returned,
 		// sendDone cleared it) and B is recorded as holding what we sent.
 		h.managers[opener].onLoop(func() {
-			require.False(t, h.managers[opener].senders[testPeerID(other)].inFlight)
+			k := topicPeer{topic: 0, peer: testPeerID(other)}
+			require.False(t, h.managers[opener].senders[k].inFlight)
 			ss := h.managers[opener].getSlotState("t0", 1)
 			b := ss.buckets[string(data)]
 			for _, pos := range []int{3, 8, 21} {
 				require.Equal(t, 1, b.holderCount[pos], "B recorded as holder")
 			}
 		})
+	})
+}
+
+// TestEndToEndSecondTopicForward proves topic routing is not hard-coded to
+// topic 0: streams, send selection, receive state, and tracer events all carry
+// topic 1 end-to-end.
+func TestEndToEndSecondTopicForward(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+
+		var got []int
+		recv := tracerFunc(func(_, topicIdx, pos int, _ []byte, _ int64) {
+			if topicIdx == 1 {
+				got = append(got, pos)
+			}
+		})
+		opener, other := orderedPair()
+		h := newHarnessWithTopics(t, ctx, 2, noFanout, map[int]Tracer{other: recv},
+			[]string{"t0", "t1"})
+
+		h.connectUp(t, ctx, opener, other)
+		h.managers[opener].forceTopicRole(1, testPeerID(other), rolePush)
+
+		data := []byte("topic-one-slot-one")
+		h.managers[opener].PublishLocal("t1", 1, 11, []byte{0x11}, data)
+		synctest.Wait()
+		h.managers[opener].post(tickEvent{})
+		synctest.Wait()
+		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
+
+		require.Equal(t, []int{11}, got)
+		require.Equal(t, 1, h.managers[other].ValidatedCount("t1", 1))
+		require.Equal(t, 0, h.managers[other].ValidatedCount("t0", 1))
 	})
 }
 

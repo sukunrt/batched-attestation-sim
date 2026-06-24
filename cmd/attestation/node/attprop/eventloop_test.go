@@ -27,10 +27,10 @@ func schedManager(t *testing.T, maxAttsPerMsg, budgetB, maxPeers int) *Manager {
 		},
 		topicIndex:     map[string]int{"t0": 0},
 		events:         make(chan event, 1024),
-		senders:        map[peer.ID]*peerSender{},
-		bitmapWriters:  map[peer.ID]*peerSender{},
-		controlWriters: map[peer.ID]*peerSender{},
-		mesh:           newMeshState(testCfg()),
+		senders:        map[topicPeer]*peerSender{},
+		bitmapWriters:  map[topicPeer]*peerSender{},
+		controlWriters: map[topicPeer]*peerSender{},
+		meshes:         map[int]*meshState{0: newMeshState(testCfg())},
 		slots:          map[string]map[int]*slotState{},
 	}
 	return m
@@ -39,18 +39,18 @@ func schedManager(t *testing.T, maxAttsPerMsg, budgetB, maxPeers int) *Manager {
 // addFakeSender wires a peer with a fake data sender (work buffered, not drained)
 // and the given mesh role.
 func (m *Manager) addFakeSender(p peer.ID, role meshRole) {
-	m.senders[p] = &peerSender{peer: p, work: make(chan []byte, 64)}
-	m.mesh.roles[p] = role
+	m.senders[topicPeer{topic: 0, peer: p}] = &peerSender{peer: p, work: make(chan []byte, 64)}
+	m.mesh(0).roles[p] = role
 }
 
 // inFlightByRole counts how many senders of each role currently have a data send
 // in flight.
 func (m *Manager) inFlightByRole() (push, bitmap int) {
-	for p, s := range m.senders {
+	for k, s := range m.senders {
 		if !s.inFlight {
 			continue
 		}
-		switch m.mesh.role(p) {
+		switch m.mesh(k.topic).role(k.peer) {
 		case rolePush:
 			push++
 		case roleBitmap:
@@ -172,18 +172,19 @@ func TestSendDoneReselects(t *testing.T) {
 	m.addFakeSender(pid(0), rolePush)
 
 	m.trySelectAndSend()
-	require.True(t, m.senders[pid(0)].inFlight)
-	require.Len(t, m.senders[pid(0)].work, 1, "one frame handed off")
+	k := topicPeer{topic: 0, peer: pid(0)}
+	require.True(t, m.senders[k].inFlight)
+	require.Len(t, m.senders[k].work, 1, "one frame handed off")
 
 	// A second pass must NOT start another send while one is in flight.
 	m.trySelectAndSend()
-	require.Len(t, m.senders[pid(0)].work, 1, "still one in-flight, no second send")
+	require.Len(t, m.senders[k].work, 1, "still one in-flight, no second send")
 
 	// Drain the first frame and signal completion; the next chunk is selected.
-	<-m.senders[pid(0)].work
-	m.onSendDone(pid(0))
-	require.True(t, m.senders[pid(0)].inFlight, "next send started after sendDone")
-	require.Len(t, m.senders[pid(0)].work, 1)
+	<-m.senders[k].work
+	m.onSendDone(0, pid(0))
+	require.True(t, m.senders[k].inFlight, "next send started after sendDone")
+	require.Len(t, m.senders[k].work, 1)
 }
 
 // TestInboundDataMarksHolder: a received data batch records the sender as a
@@ -200,7 +201,7 @@ func TestInboundDataMarksHolder(t *testing.T) {
 		AttestorIndices: []uint32{2, 9, 40},
 		Signatures:      [][]byte{{1}, {2}, {3}},
 	}}}
-	m.onInboundData(pid(7), env)
+	m.onInboundData(0, pid(7), env)
 
 	ss := m.getSlotState("t0", 1)
 	require.NotNil(t, ss)
@@ -229,7 +230,7 @@ func TestInboundDataBadIndexDropsBatch(t *testing.T) {
 		AttestorIndices: []uint32{2, uint32(testCommittee)}, // second is out of range
 		Signatures:      [][]byte{{1}, {2}},
 	}}}
-	m.onInboundData(pid(7), env)
+	m.onInboundData(0, pid(7), env)
 
 	ss := m.getSlotState("t0", 1)
 	if ss != nil {

@@ -118,18 +118,19 @@ type Manager struct {
 	// sole consumer.
 	events chan event
 
-	// senders holds the per-peer data sender (push stream). One in-flight data
-	// frame per peer; the eventloop hands work off and waits for sendDoneEvent.
-	senders map[peer.ID]*peerSender
+	// senders holds the per-(topic, peer) data sender (push stream). One
+	// in-flight data frame per topic peer; the eventloop hands work off and waits
+	// for sendDoneEvent.
+	senders map[topicPeer]*peerSender
 
-	// bitmapWriters / controlWriters hold the per-peer bitmap and control stream
-	// writers. These bypass the send budget (§F1) — advertisements and mesh
-	// management never block behind a data write.
-	bitmapWriters  map[peer.ID]*peerSender
-	controlWriters map[peer.ID]*peerSender
+	// bitmapWriters / controlWriters hold the per-(topic, peer) bitmap and
+	// control stream writers. These bypass the send budget (§F1) — advertisements
+	// and mesh management never block behind a data write.
+	bitmapWriters  map[topicPeer]*peerSender
+	controlWriters map[topicPeer]*peerSender
 
-	// mesh tracks per-peer push/bitmap role and per-mesh prune backoff (§C).
-	mesh *meshState
+	// meshes track per-topic peer push/bitmap roles and prune backoff (§C).
+	meshes map[int]*meshState
 
 	// slots holds per-(topic, slot) state with the holder-count scarcity index
 	// (§E). Keyed topic name -> slot -> slotState.
@@ -147,8 +148,14 @@ type Manager struct {
 	// streamsMu guards stream setup state, which is intentionally outside the
 	// eventloop because NewStream and inbound handlers run on libp2p goroutines.
 	streamsMu sync.Mutex
-	opening   map[peer.ID]struct{}
-	pending   map[peer.ID]*peerStreams
+	opening   map[topicPeer]struct{}
+	pending   map[topicPeer]*peerStreams
+}
+
+// topicPeer identifies one peer on one topic's stream set.
+type topicPeer struct {
+	topic int
+	peer  peer.ID
 }
 
 // New constructs an att_propagation Manager. The node layer wires in the host,
@@ -165,6 +172,10 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 	for i, name := range cfg.Topics {
 		topicIndex[name] = i
 	}
+	meshes := make(map[int]*meshState, len(cfg.Topics))
+	for topicIdx := range cfg.Topics {
+		meshes[topicIdx] = newMeshState(cfg)
+	}
 	return &Manager{
 		host:           h,
 		verifier:       v,
@@ -174,34 +185,36 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 		self:           h.ID(),
 		topicIndex:     topicIndex,
 		events:         make(chan event, 256),
-		senders:        make(map[peer.ID]*peerSender),
-		bitmapWriters:  make(map[peer.ID]*peerSender),
-		controlWriters: make(map[peer.ID]*peerSender),
-		mesh:           newMeshState(cfg),
+		senders:        make(map[topicPeer]*peerSender),
+		bitmapWriters:  make(map[topicPeer]*peerSender),
+		controlWriters: make(map[topicPeer]*peerSender),
+		meshes:         meshes,
 		slots:          make(map[string]map[int]*slotState),
-		opening:        make(map[peer.ID]struct{}),
-		pending:        make(map[peer.ID]*peerStreams),
+		opening:        make(map[topicPeer]struct{}),
+		pending:        make(map[topicPeer]*peerStreams),
 	}
 }
 
 // markSendStreamsOpening claims the right to open the peer's bidirectional
 // stream set, returning false if another goroutine already claimed it. Cleared
 // by clearSendStreamsOpening on a failed open so a retry can proceed.
-func (m *Manager) markSendStreamsOpening(p peer.ID) bool {
+func (m *Manager) markSendStreamsOpening(topicIdx int, p peer.ID) bool {
 	m.streamsMu.Lock()
 	defer m.streamsMu.Unlock()
-	if _, ok := m.opening[p]; ok {
+	k := topicPeer{topic: topicIdx, peer: p}
+	if _, ok := m.opening[k]; ok {
 		return false
 	}
-	m.opening[p] = struct{}{}
+	m.opening[k] = struct{}{}
 	return true
 }
 
 // clearSendStreamsOpening releases stream setup state so a reconnect can retry.
-func (m *Manager) clearSendStreamsOpening(p peer.ID) {
+func (m *Manager) clearSendStreamsOpening(topicIdx int, p peer.ID) {
 	m.streamsMu.Lock()
-	delete(m.opening, p)
-	delete(m.pending, p)
+	k := topicPeer{topic: topicIdx, peer: p}
+	delete(m.opening, k)
+	delete(m.pending, k)
 	m.streamsMu.Unlock()
 }
 
@@ -254,4 +267,13 @@ func (m *Manager) topicIdxOf(topic string) int {
 		return i
 	}
 	return -1
+}
+
+func (m *Manager) mesh(topicIdx int) *meshState {
+	ms := m.meshes[topicIdx]
+	if ms == nil {
+		ms = newMeshState(m.cfg)
+		m.meshes[topicIdx] = ms
+	}
+	return ms
 }

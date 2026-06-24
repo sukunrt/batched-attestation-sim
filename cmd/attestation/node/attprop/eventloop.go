@@ -28,35 +28,40 @@ type event interface{ isEvent() }
 
 // inboundDataEvent is one decoded data frame off a peer's push stream.
 type inboundDataEvent struct {
-	from peer.ID
-	env  *pb.BatchedAttestationEnvelope
+	topic int
+	from  peer.ID
+	env   *pb.BatchedAttestationEnvelope
 }
 
 // inboundBitmapEvent is one decoded available-bitmap advertisement off a peer's
 // bitmap stream. A peer that sends us bitmaps is a bitmap-mesh peer.
 type inboundBitmapEvent struct {
-	from peer.ID
-	ctrl *pb.ControlEnvelope
+	topic int
+	from  peer.ID
+	ctrl  *pb.ControlEnvelope
 }
 
 // inboundControlEvent is one decoded graft/prune RPC off a peer's control
 // stream.
 type inboundControlEvent struct {
-	from peer.ID
-	ctrl *pb.AttPropControl
+	topic int
+	from  peer.ID
+	ctrl  *pb.AttPropControl
 }
 
 // sendDoneEvent signals that a peer's in-flight data send completed (its
 // WriteMsg returned — the QUIC-window backpressure signal), so the eventloop
 // can select that peer's next data message.
 type sendDoneEvent struct {
-	peer peer.ID
+	topic int
+	peer  peer.ID
 }
 
 // peerUpEvent signals that the three bidirectional streams to/from a peer are
 // established. For the opener side the streams were dialed; for the receiver
 // side they were accepted by the stream handlers.
 type peerUpEvent struct {
+	topic                 int
 	peer                  peer.ID
 	push, bitmap, control network.Stream
 }
@@ -64,7 +69,8 @@ type peerUpEvent struct {
 // peerDownEvent signals that a peer's stream closed or reset; the eventloop
 // tears down that peer's sender/role state.
 type peerDownEvent struct {
-	peer peer.ID
+	topic int
+	peer  peer.ID
 }
 
 // validatedEvent is posted from the verifier callback when a batch finishes:
@@ -143,7 +149,13 @@ type peerSender struct {
 // one-in-flight flow control. Bitmap/control writers bypass the budget and never
 // signal back, so they use a deeper buffer and a non-blocking enqueue (see
 // tryEnqueue) — the eventloop must never block handing off (§F4).
-func (m *Manager) newPeerSender(p peer.ID, s network.Stream, buf int, done func()) *peerSender {
+func (m *Manager) newPeerSender(
+	topicIdx int,
+	p peer.ID,
+	s network.Stream,
+	buf int,
+	done func(),
+) *peerSender {
 	ps := &peerSender{
 		peer:   p,
 		stream: s,
@@ -153,8 +165,8 @@ func (m *Manager) newPeerSender(p peer.ID, s network.Stream, buf int, done func(
 	go func() {
 		for f := range ps.work {
 			if err := writeFrame(ps.w, f); err != nil {
-				m.logger.Debug("write frame", "peer", shortPeer(p), "err", err)
-				m.post(peerDownEvent{peer: p})
+				m.logger.Debug("write frame", "topic", topicIdx, "peer", shortPeer(p), "err", err)
+				m.post(peerDownEvent{topic: topicIdx, peer: p})
 				return
 			}
 			if done != nil {
@@ -233,12 +245,12 @@ func (m *Manager) dispatch(ev event) {
 	case peerDownEvent:
 		m.onPeerDown(e)
 	case inboundControlEvent:
-		m.onInboundControl(e.from, e.ctrl)
+		m.onInboundControl(e.topic, e.from, e.ctrl)
 	case inboundBitmapEvent:
-		m.onInboundBitmap(e.from, e.ctrl)
+		m.onInboundBitmap(e.topic, e.from, e.ctrl)
 		m.trySelectAndSend()
 	case inboundDataEvent:
-		m.onInboundData(e.from, e.env)
+		m.onInboundData(e.topic, e.from, e.env)
 		m.trySelectAndSend()
 	case validatedEvent:
 		m.onValidated(e)
@@ -250,7 +262,7 @@ func (m *Manager) dispatch(ev event) {
 		e.fn()
 		m.trySelectAndSend()
 	case sendDoneEvent:
-		m.onSendDone(e.peer)
+		m.onSendDone(e.topic, e.peer)
 	case tickEvent:
 		m.onTick()
 	case bitmapFloorEvent:
@@ -279,20 +291,20 @@ func (m *Manager) shutdown() {
 // control writers bypass the budget, so they pass a nil done callback.
 // Idempotent: if a peer accidentally opens a second set, reset the duplicate.
 func (m *Manager) onPeerUp(e peerUpEvent) {
-	p := e.peer
-	if _, ok := m.senders[p]; ok {
+	k := topicPeer{topic: e.topic, peer: e.peer}
+	if _, ok := m.senders[k]; ok {
 		e.push.Reset()
 		e.bitmap.Reset()
 		e.control.Reset()
 		return // already up (duplicate event)
 	}
-	m.senders[p] = m.newPeerSender(p, e.push, 1, func() {
-		m.post(sendDoneEvent{peer: p})
+	m.senders[k] = m.newPeerSender(e.topic, e.peer, e.push, 1, func() {
+		m.post(sendDoneEvent{topic: e.topic, peer: e.peer})
 	})
-	m.bitmapWriters[p] = m.newPeerSender(p, e.bitmap, writerBuf, nil)
-	m.controlWriters[p] = m.newPeerSender(p, e.control, writerBuf, nil)
-	m.mesh.roles[p] = roleConnected
-	m.logger.Debug("peer_up", "peer", shortPeer(p))
+	m.bitmapWriters[k] = m.newPeerSender(e.topic, e.peer, e.bitmap, writerBuf, nil)
+	m.controlWriters[k] = m.newPeerSender(e.topic, e.peer, e.control, writerBuf, nil)
+	m.mesh(e.topic).roles[e.peer] = roleConnected
+	m.logger.Debug("peer_up", "topic", e.topic, "peer", shortPeer(e.peer))
 }
 
 // onPeerDown tears down a peer: close its writers (senders exit), clear its
@@ -302,32 +314,32 @@ func (m *Manager) onPeerUp(e peerUpEvent) {
 // self-correcting skew it leaves. Idempotent: the three readers plus the sender
 // can each post a peerDownEvent, but only the first finds the peer present.
 func (m *Manager) onPeerDown(e peerDownEvent) {
-	p := e.peer
-	if s, ok := m.senders[p]; ok {
+	k := topicPeer{topic: e.topic, peer: e.peer}
+	if s, ok := m.senders[k]; ok {
 		if s.inFlight {
 			m.activeData--
 		}
 		s.closeAndReset()
-		delete(m.senders, p)
+		delete(m.senders, k)
 	}
-	if s, ok := m.bitmapWriters[p]; ok {
+	if s, ok := m.bitmapWriters[k]; ok {
 		s.closeAndReset()
-		delete(m.bitmapWriters, p)
+		delete(m.bitmapWriters, k)
 	}
-	if s, ok := m.controlWriters[p]; ok {
+	if s, ok := m.controlWriters[k]; ok {
 		s.closeAndReset()
-		delete(m.controlWriters, p)
+		delete(m.controlWriters, k)
 	}
-	delete(m.mesh.roles, p)
+	delete(m.mesh(e.topic).roles, e.peer)
 	// Release the open-claim so a reconnect (a fresh inbound stream) re-opens our
 	// outbound set instead of being suppressed by a stale claim.
-	m.clearSendStreamsOpening(p)
+	m.clearSendStreamsOpening(e.topic, e.peer)
 }
 
 // onSendDone clears a peer's data in-flight flag, releases its budget charge,
 // and re-selects (a freed slot may unblock a held push/bitmap send) (§F4).
-func (m *Manager) onSendDone(p peer.ID) {
-	if s, ok := m.senders[p]; ok && s.inFlight {
+func (m *Manager) onSendDone(topicIdx int, p peer.ID) {
+	if s, ok := m.senders[topicPeer{topic: topicIdx, peer: p}]; ok && s.inFlight {
 		s.inFlight = false
 		m.activeData--
 	}
@@ -349,72 +361,76 @@ func (m *Manager) onTick() {
 // the next selection pass.
 func (m *Manager) onHeartbeat() {
 	now := time.Now()
-	candidates := make([]peer.ID, 0, len(m.senders))
-	for p := range m.senders {
-		candidates = append(candidates, p)
-	}
-	grafts, prunes := m.mesh.heartbeat(now, candidates)
-	for p, items := range grafts {
-		m.sendControl(p, items)
-		m.logger.Debug("graft", "peer", shortPeer(p), "items", len(items))
-		// If we grafted this peer into the bitmap mesh, seed it with our full
-		// current bitmap (§D1).
-		if m.mesh.role(p) == roleBitmap {
-			m.sendFullBitmapTo(p)
+	for topicIdx := range m.cfg.Topics {
+		candidates := make([]peer.ID, 0, len(m.senders))
+		for k := range m.senders {
+			if k.topic == topicIdx {
+				candidates = append(candidates, k.peer)
+			}
 		}
-	}
-	for p, items := range prunes {
-		m.sendControl(p, items)
-		m.logger.Debug("prune", "peer", shortPeer(p), "items", len(items))
+		grafts, prunes := m.mesh(topicIdx).heartbeat(now, candidates)
+		for p, items := range grafts {
+			m.sendControl(topicIdx, p, items)
+			m.logger.Debug("graft", "topic", topicIdx, "peer", shortPeer(p), "items", len(items))
+			// If we grafted this peer into the bitmap mesh, seed it with our full
+			// current bitmap (§D1).
+			if m.mesh(topicIdx).role(p) == roleBitmap {
+				m.sendFullBitmapTo(topicIdx, p)
+			}
+		}
+		for p, items := range prunes {
+			m.sendControl(topicIdx, p, items)
+			m.logger.Debug("prune", "topic", topicIdx, "peer", shortPeer(p), "items", len(items))
+		}
 	}
 }
 
 // sendFullBitmapTo dumps our full current available bitmap (every active slot)
 // to one peer on its bitmap writer, bypassing the budget. Used when a peer first
 // enters our bitmap mesh (§D1).
-func (m *Manager) sendFullBitmapTo(p peer.ID) {
-	w, ok := m.bitmapWriters[p]
+func (m *Manager) sendFullBitmapTo(topicIdx int, p peer.ID) {
+	w, ok := m.bitmapWriters[topicPeer{topic: topicIdx, peer: p}]
 	if !ok {
 		return
 	}
-	for _, topic := range m.cfg.Topics {
-		for slot := range m.slots[topic] {
-			ctrl := m.buildAvailableEnvelope(topic, slot)
-			if ctrl == nil {
-				continue
-			}
-			frame, err := proto.Marshal(ctrl)
-			if err != nil {
-				m.logger.Error("marshal full bitmap", "err", err)
-				continue
-			}
-			m.tryEnqueue(w, frame, "bitmap_full")
+	topic := m.cfg.Topics[topicIdx]
+	for slot := range m.slots[topic] {
+		ctrl := m.buildAvailableEnvelope(topic, slot)
+		if ctrl == nil {
+			continue
 		}
+		frame, err := proto.Marshal(ctrl)
+		if err != nil {
+			m.logger.Error("marshal full bitmap", "topic", topicIdx, "err", err)
+			continue
+		}
+		m.tryEnqueue(w, frame, "bitmap_full")
 	}
 }
 
 // onInboundControl feeds graft/prune items to the mesh state machine and sends
 // any reply on the peer's control writer (§C). A graft may open the peer into a
 // mesh; a prune drops it and arms backoff.
-func (m *Manager) onInboundControl(from peer.ID, ctrl *pb.AttPropControl) {
+func (m *Manager) onInboundControl(topicIdx int, from peer.ID, ctrl *pb.AttPropControl) {
 	now := time.Now()
-	wasBitmap := m.mesh.role(from) == roleBitmap
+	ms := m.mesh(topicIdx)
+	wasBitmap := ms.role(from) == roleBitmap
 	var reply []*pb.AttPropControlItem
 	for _, it := range ctrl.Items {
 		switch it.Op {
 		case pb.AttPropMeshOp_GRAFT:
-			reply = append(reply, m.mesh.onGraft(from, it.Mesh, now)...)
+			reply = append(reply, ms.onGraft(from, it.Mesh, now)...)
 		case pb.AttPropMeshOp_PRUNE:
-			m.mesh.onPrune(from, it.Mesh, now)
+			ms.onPrune(from, it.Mesh, now)
 		}
 	}
 	if len(reply) > 0 {
-		m.sendControl(from, reply)
+		m.sendControl(topicIdx, from, reply)
 	}
 	// A peer that just entered our bitmap mesh gets the full current bitmap so it
 	// starts with our complete state (§D1).
-	if !wasBitmap && m.mesh.role(from) == roleBitmap {
-		m.sendFullBitmapTo(from)
+	if !wasBitmap && ms.role(from) == roleBitmap {
+		m.sendFullBitmapTo(topicIdx, from)
 	}
 }
 
@@ -429,11 +445,11 @@ func (m *Manager) onInboundControl(from peer.ID, ctrl *pb.AttPropControl) {
 //  2. Bitmap, gated: for each bitmap peer with no in-flight send while
 //     activeData < B, send its scarcest chunk.
 func (m *Manager) trySelectAndSend() {
-	for p, s := range m.senders {
-		if s.inFlight || m.mesh.role(p) != rolePush {
+	for k, s := range m.senders {
+		if s.inFlight || m.mesh(k.topic).role(k.peer) != rolePush {
 			continue
 		}
-		chunk, more, ss := m.selectForPeer(p)
+		chunk, more, ss := m.selectForPeer(k.topic, k.peer)
 		if chunk == nil {
 			continue
 		}
@@ -442,23 +458,23 @@ func (m *Manager) trySelectAndSend() {
 		// whether or not candidates remain beyond it (`more`).
 		full := more || chunkLen(chunk) >= m.cfg.MaxAttsPerMessage
 		if full || m.sendAllToPushMesh {
-			m.send(p, ss, chunk)
+			m.send(k, ss, chunk)
 		} else {
-			ss.rollbackChunk(p, chunk)
+			ss.rollbackChunk(k.peer, chunk)
 		}
 	}
-	for p, s := range m.senders {
+	for k, s := range m.senders {
 		if m.activeData >= m.cfg.SendBudgetB {
 			break
 		}
-		if s.inFlight || m.mesh.role(p) != roleBitmap {
+		if s.inFlight || m.mesh(k.topic).role(k.peer) != roleBitmap {
 			continue
 		}
-		chunk, _, ss := m.selectForPeer(p)
+		chunk, _, ss := m.selectForPeer(k.topic, k.peer)
 		if chunk == nil {
 			continue
 		}
-		m.send(p, ss, chunk)
+		m.send(k, ss, chunk)
 	}
 }
 
@@ -467,13 +483,12 @@ func (m *Manager) trySelectAndSend() {
 // remain beyond it, and the slotState the chunk was drawn from (nil chunk when
 // the peer needs nothing). The draw commits holder-count as it goes (§E2);
 // callers that decide not to send must rollbackChunk.
-func (m *Manager) selectForPeer(p peer.ID) (map[string][]int, bool, *slotState) {
-	for _, topic := range m.cfg.Topics {
-		for _, ss := range m.slots[topic] {
-			chunk, more := ss.selectOneChunkForPeer(p, m.cfg.MaxAttsPerMessage)
-			if chunk != nil {
-				return chunk, more, ss
-			}
+func (m *Manager) selectForPeer(topicIdx int, p peer.ID) (map[string][]int, bool, *slotState) {
+	topic := m.cfg.Topics[topicIdx]
+	for _, ss := range m.slots[topic] {
+		chunk, more := ss.selectOneChunkForPeer(p, m.cfg.MaxAttsPerMessage)
+		if chunk != nil {
+			return chunk, more, ss
 		}
 	}
 	return nil, false, nil
@@ -522,7 +537,7 @@ func (ss *slotState) indexBumpHolderDown(bk string, pos, from int) {
 // the budget. inFlight is cleared by sendDoneEvent when WriteMsg returns. Push
 // sends are exempt from B but still tracked in activeData for observability and
 // so a draining push send counts against bitmap fill (§F1).
-func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
+func (m *Manager) send(k topicPeer, ss *slotState, chunk map[string][]int) {
 	env := &pb.BatchedAttestationEnvelope{}
 	bks := sortedBucketKeys(ss, chunk)
 	var total int
@@ -534,16 +549,17 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 	frame, err := proto.Marshal(env)
 	if err != nil {
 		m.logger.Error("marshal data envelope", "err", err)
-		ss.rollbackChunk(p, chunk)
+		ss.rollbackChunk(k.peer, chunk)
 		return
 	}
-	s := m.senders[p]
+	s := m.senders[k]
 	s.inFlight = true
 	m.activeData++
 	s.work <- frame
 	m.logger.Debug("attprop_send_data",
-		"peer", shortPeer(p),
-		"role", int(m.mesh.role(p)),
+		"peer", shortPeer(k.peer),
+		"topic", k.topic,
+		"role", int(m.mesh(k.topic).role(k.peer)),
 		"slot", ss.slot,
 		"num_buckets", len(bks),
 		"positions", total,
@@ -553,14 +569,14 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 
 // sendControl marshals graft/prune items and hands them to the peer's control
 // writer (bypasses the budget). Dropped silently if the peer has no writer yet.
-func (m *Manager) sendControl(p peer.ID, items []*pb.AttPropControlItem) {
-	w, ok := m.controlWriters[p]
+func (m *Manager) sendControl(topicIdx int, p peer.ID, items []*pb.AttPropControlItem) {
+	w, ok := m.controlWriters[topicPeer{topic: topicIdx, peer: p}]
 	if !ok {
 		return
 	}
 	frame, err := proto.Marshal(&pb.AttPropControl{Items: items})
 	if err != nil {
-		m.logger.Error("marshal control", "err", err)
+		m.logger.Error("marshal control", "topic", topicIdx, "err", err)
 		return
 	}
 	m.tryEnqueue(w, frame, "control")
@@ -575,8 +591,7 @@ func (m *Manager) sendControl(p peer.ID, items []*pb.AttPropControlItem) {
 // envelope carries no slot. attestation_data is unique per (topic, slot), so the
 // slot is resolved by slotForData: an already-known bucket's slot, else the
 // latest active slot (the sim runs slots sequentially — see slotForData).
-func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope) {
-	const topicIdx = 0
+func (m *Manager) onInboundData(topicIdx int, from peer.ID, env *pb.BatchedAttestationEnvelope) {
 	topic := m.cfg.Topics[topicIdx]
 	for _, batch := range env.Batches {
 		if len(batch.AttestorIndices) != len(batch.Signatures) {

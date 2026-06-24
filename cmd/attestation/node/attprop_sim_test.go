@@ -128,6 +128,68 @@ func TestAttProp32MeshPropagation(t *testing.T) {
 	})
 }
 
+func TestAttPropTwoTopicMeshPropagation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			numNodes      = 2
+			numTopics     = 2
+			committeeSize = 2
+			slotDuration  = 2 * time.Second
+		)
+
+		nw := newSimTestNetwork(t, numNodes)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tr := newTestTracer()
+		params := smallAttPropParams()
+
+		nodes := make([]*Node, numNodes)
+		for i := range numNodes {
+			nodes[i] = &Node{
+				Num:          i,
+				PublishSlots: map[int]struct{}{1: {}},
+				NumTopics:    numTopics,
+				CommitteeMemberships: []TopicMembership{
+					{TopicIndex: 0, Position: i},
+					{TopicIndex: 1, Position: i},
+				},
+				CommitteeSize:       committeeSize,
+				AttestationDataSize: 64,
+				SignatureSize:       36,
+				VerificationDelay:   testVerificationDelay,
+				Network:             nw,
+				Tracer:              tr,
+				AttPropagation:      true,
+				AttProp:             params,
+				PublishStart:        time.Now(),
+				SlotDuration:        slotDuration,
+				Host:                nw.hosts[i],
+			}
+			nodes[i].Start(ctx)
+			t.Cleanup(nodes[i].verifier.Stop)
+		}
+
+		openStreams(t, nw, nodes, 0, 1)
+		synctest.Wait()
+
+		var wg sync.WaitGroup
+		for _, n := range nodes {
+			wg.Go(func() { n.Run(1, slotDuration) })
+		}
+		wg.Wait()
+
+		for topic := range numTopics {
+			name := topicName(topic)
+			for i, n := range nodes {
+				got := n.attProp.ValidatedCount(name, 1)
+				if got != committeeSize {
+					t.Fatalf("node %d topic %d validated %d/%d", i, topic, got, committeeSize)
+				}
+			}
+		}
+	})
+}
+
 // TestAttProp32FanoutInjection exercises the fanout (leaf-injector) path at
 // scale: 32 fanout nodes each own a distinct position and inject it directly to
 // every receiver. Receivers are plain mesh nodes that only receive (they are not

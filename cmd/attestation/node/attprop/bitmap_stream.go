@@ -74,11 +74,11 @@ func sortedBuckets(ss *slotState) []string {
 // emit (§D2). When not forced it is the +K trigger: emit slots whose
 // since-emit counter has reached K and reset that counter. Eventloop-only.
 func (m *Manager) emitBitmaps(forced bool) {
-	bitmapPeers := m.bitmapMeshPeers()
-	if len(bitmapPeers) == 0 {
-		return
-	}
-	for _, topic := range m.cfg.Topics {
+	for topicIdx, topic := range m.cfg.Topics {
+		bitmapPeers := m.bitmapMeshPeers(topicIdx)
+		if len(bitmapPeers) == 0 {
+			continue
+		}
 		for slot, ss := range m.slots[topic] {
 			if !forced && ss.validatedSinceEmit < bitmapTriggerK {
 				continue
@@ -93,7 +93,7 @@ func (m *Manager) emitBitmaps(forced bool) {
 				continue
 			}
 			for _, p := range bitmapPeers {
-				if w, ok := m.bitmapWriters[p]; ok {
+				if w, ok := m.bitmapWriters[topicPeer{topic: topicIdx, peer: p}]; ok {
 					m.tryEnqueue(w, frame, "bitmap")
 				}
 			}
@@ -137,11 +137,11 @@ func (m *Manager) changedAvailableEnvelope(
 
 // bitmapMeshPeers returns the peers currently in our bitmap mesh, in sorted
 // order for deterministic sends.
-func (m *Manager) bitmapMeshPeers() []peer.ID {
+func (m *Manager) bitmapMeshPeers(topicIdx int) []peer.ID {
 	var ps []peer.ID
-	for p := range m.bitmapWriters {
-		if m.mesh.role(p) == roleBitmap {
-			ps = append(ps, p)
+	for k := range m.bitmapWriters {
+		if k.topic == topicIdx && m.mesh(topicIdx).role(k.peer) == roleBitmap {
+			ps = append(ps, k.peer)
 		}
 	}
 	slices.Sort(ps)
@@ -153,8 +153,7 @@ func (m *Manager) bitmapMeshPeers() []peer.ID {
 // holder-count and the scarcity index on each 0→1 flip — §E1). The metadata
 // carries the authoritative Slot, so it also seeds the (topic, slot) bucket.
 // Eventloop-only. Emits partial_recv_metadata (§H2).
-func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
-	const topicIdx = 0
+func (m *Manager) onInboundBitmap(topicIdx int, from peer.ID, ctrl *pb.ControlEnvelope) {
 	topic := m.cfg.Topics[topicIdx]
 	for _, md := range ctrl.Metadatas {
 		slot := int(md.Slot)

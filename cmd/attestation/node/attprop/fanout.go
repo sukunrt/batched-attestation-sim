@@ -51,10 +51,13 @@ func (m *Manager) fanoutPublish(topic string, slot, pos int, sig, data []byte) {
 	}
 
 	topicIdx := m.topicIdxOf(topic)
+	if topicIdx < 0 {
+		m.logger.Error("fanout publish unknown topic", "topic", topic)
+		return
+	}
 	digest := attDigestHex(data)
-	const pushTopicIdx = 0
 	for _, p := range m.host.Network().Peers() {
-		s, err := m.host.NewStream(context.Background(), p, PushProtocol(pushTopicIdx))
+		s, err := m.host.NewStream(context.Background(), p, PushProtocol(topicIdx))
 		if err != nil {
 			m.logger.Debug("fanout open push stream", "peer", shortPeer(p), "err", err)
 			continue
