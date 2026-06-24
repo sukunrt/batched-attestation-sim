@@ -331,10 +331,19 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 					requesters = append(requesters, p)
 				}
 			}
+			// availEnv advertises our validated bitmap across all buckets. It is
+			// constant for the tick (our validated set can't change while m.mu is
+			// held), so it is built once and piggybacked on the FIRST data message
+			// to each mesh peer (tracked by sentAvailableTo).
+			var availEnv []byte
+			if m.node.SendAvailableWithData {
+				availEnv = m.buildAvailableEnvelope(ss, slot)
+			}
+			sentAvailableTo := make(map[peer.ID]bool)
 			for {
 				progressed := false
 				for _, p := range requesters {
-					chunk := m.selectOneChunkForPeer(ss, p, peerStates[p].gossipPeer)
+					chunk, more := m.selectOneChunkForPeer(ss, p, peerStates[p].gossipPeer)
 					if chunk == nil {
 						continue
 					}
@@ -355,6 +364,19 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 						m.logger.Error("marshal data envelope", "err", err)
 						continue
 					}
+					action := partialmessages.PublishAction{EncodedPartialMessage: encodedData}
+					// Piggyback our available bitmap onto this (data-carrying)
+					// message for a mesh peer, but ONLY when we still hold more the
+					// peer needs beyond this chunk (`more`) — if this message already
+					// carries everything we have for the peer, the data conveys our
+					// state and the bitmap is pure overhead. Once per tick per peer,
+					// gossip peers excluded (they get available via the metadata
+					// action below). Never sent without data, so the receiver won't
+					// reclassify us as a gossip peer.
+					if availEnv != nil && more && !peerStates[p].gossipPeer && !sentAvailableTo[p] {
+						action.EncodedPartsMetadata = availEnv
+						sentAvailableTo[p] = true
+					}
 					m.logger.Info("partial_send_tick",
 						"peer", shortPeer(p),
 						"peer_type", peerTypeLabel(peerStates[p]),
@@ -362,9 +384,10 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 						"topic", topicIdx,
 						"num_buckets", len(bks),
 						"data_bytes", len(encodedData),
+						"md_bytes", len(action.EncodedPartsMetadata),
 						"total_positions_sent", total,
 					)
-					if !yield(p, partialmessages.PublishAction{EncodedPartialMessage: encodedData}) {
+					if !yield(p, action) {
 						return
 					}
 				}
@@ -429,12 +452,39 @@ func peerTypeLabel(ps peerState) string {
 	return "mesh"
 }
 
+// buildAvailableEnvelope marshals an available-only ControlEnvelope advertising
+// our validated positions for every bucket at this (topic, slot), in bucketSeq
+// order. Returns nil when nothing is validated yet (or marshalling fails). Reuses
+// getAttestationMetadata so the bitmap encoding matches the gossip metadata path.
+// Caller holds m.mu.
+func (m *priorityAttestationManager) buildAvailableEnvelope(ss *prioritySlotState, slot int) []byte {
+	bks := slices.Collect(maps.Keys(ss.attestationsMap))
+	slices.SortFunc(bks, func(a, b string) int { return ss.bucketSeq[a] - ss.bucketSeq[b] })
+	ctrl := &pb.ControlEnvelope{}
+	for _, bk := range bks {
+		if md := getAttestationMetadata(ss.attestationsMap[bk], m.committeeSize, slot, nil, true); md != nil {
+			ctrl.Metadatas = append(ctrl.Metadatas, md)
+		}
+	}
+	if len(ctrl.Metadatas) == 0 {
+		return nil
+	}
+	encoded, err := proto.Marshal(ctrl)
+	if err != nil {
+		m.logger.Error("marshal available envelope", "err", err)
+		return nil
+	}
+	return encoded
+}
+
 // selectOneChunkForPeer draws up to maxPerMessage of the positions this peer
 // needs, in least-forwarded-first order across all buckets, and commits each
 // draw (per-peer available, sendCount, index bump) so the next peer served in
 // the same pass sees the updated sendCount. It returns one chunk as a
-// bucketKey->positions map in priority order, or nil when the peer has nothing
-// left to send. Caller holds m.mu.
+// bucketKey->positions map in priority order (nil when the peer has nothing left
+// to send) plus `more`: whether the peer needs additional positions we hold
+// beyond this chunk (i.e. we hit the per-message cap with candidates to spare).
+// Caller holds m.mu.
 //
 // Candidates are collected read-only first — ascending sendCount level, and
 // within a level sorted by bucketSeq then position so the order is deterministic
@@ -442,9 +492,10 @@ func peerTypeLabel(ps peerState) string {
 // mutation can't perturb the scan. The per-peer available bitmap guards against
 // re-drawing a position across passes. Entries in ss.levels are validated and
 // under the lifetime ceiling by construction, so no extra guard is needed.
-func (m *priorityAttestationManager) selectOneChunkForPeer(ss *prioritySlotState, p peer.ID, gossipPeer bool) map[string][]int {
+func (m *priorityAttestationManager) selectOneChunkForPeer(ss *prioritySlotState, p peer.ID, gossipPeer bool) (map[string][]int, bool) {
 	var drawn []idxEntry
-	for k := 0; k < len(ss.levels) && len(drawn) < m.maxPerMessage; k++ {
+	more := false
+	for k := 0; k < len(ss.levels) && !more; k++ {
 		var cand []idxEntry
 		for _, e := range ss.levels[k].entries {
 			b := ss.attestationsMap[e.bucketKey]
@@ -468,13 +519,14 @@ func (m *priorityAttestationManager) selectOneChunkForPeer(ss *prioritySlotState
 		})
 		for _, e := range cand {
 			if len(drawn) == m.maxPerMessage {
+				more = true // a needed candidate exists beyond this chunk
 				break
 			}
 			drawn = append(drawn, e)
 		}
 	}
 	if len(drawn) == 0 {
-		return nil
+		return nil, false
 	}
 
 	chunk := make(map[string][]int)
@@ -487,7 +539,7 @@ func (m *priorityAttestationManager) selectOneChunkForPeer(ss *prioritySlotState
 		b.sendCount[e.pos]++
 		ss.indexBump(e.bucketKey, e.pos, sc)
 	}
-	return chunk
+	return chunk, more
 }
 
 // encodeBatch builds a BatchedAttestation for the given positions, emitting
@@ -604,6 +656,12 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 		"data_bytes", len(rpc.PartialMessage),
 	)
 
+	// A metadata-only RPC marks the sender as a gossip peer. A mesh peer
+	// piggybacks its Available bitmap alongside data (SendAvailableWithData), so
+	// an RPC that also carries data must NOT reclassify the sender as gossip — we
+	// still record its Available below, just not the gossip flag.
+	hasData := len(dataEnv.Batches) > 0
+
 	for _, md := range ctrl.Metadatas {
 		b := m.getOrCreateAttestationState(topic, slot, md.AttestationData)
 		bps := initAndGetPeerAttestationState(b, from, m.committeeSize)
@@ -614,7 +672,7 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 		requests := bitmap.Bitmap(md.Requests)
 		bps.pendingWant.Or(md.Requests)
 
-		if available.OnesCount() > 0 || requests.OnesCount() > 0 {
+		if !hasData && (available.OnesCount() > 0 || requests.OnesCount() > 0) {
 			ps := peerStates[from]
 			ps.gossipPeer = true
 			peerStates[from] = ps

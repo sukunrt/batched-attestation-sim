@@ -211,6 +211,8 @@ def generate_shadow_yaml(
             args_parts.append(
                 f"-max-attestations-per-message={config.max_attestations_per_message}"
             )
+            if config.send_available_with_data:
+                args_parts.append("-send-available-with-data")
 
         node_memberships = memberships.get(node_num, [])
         if node_memberships:

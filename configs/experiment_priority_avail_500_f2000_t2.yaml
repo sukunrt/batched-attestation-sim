@@ -1,0 +1,44 @@
+# Experiment: partial-priority WITH send_available_with_data, 2000 attestors/topic.
+# Single variant — same topology (seed 42) and params as
+# experiment_classic_partial_priority_500_f2000_t2.yaml's partial-priority arm,
+# so it is directly comparable to the existing classic / partial / priority data.
+# The only delta vs that arm is send_available_with_data: true (piggyback our
+# validated bitmap onto the first data message to each mesh peer per tick).
+#   - 500 mesh (relay) nodes, 2 topics, 2000 fanout attestors per topic
+#   - 2000 attestors per topic per slot (all fanout)
+
+topology:
+  num_nodes: 500
+  degree: 30
+  type: random
+  seed: 42
+  super_node_fraction: 0.2
+  fanout_nodes_per_topic: 2000
+  fanout_node_mesh_peers: 2
+
+simulations:
+  # Partial-priority (size-capped <= 30/msg, least-forwarded-first) + available bitmap
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 2
+    num_slots: 3
+    slot_duration_seconds: 10
+    num_attestors: 2000
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 10.0
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    partial_priority: true
+    publish_interval_ms: 20
+    max_peers_per_attestation: 0
+    max_attestations_per_message: 30
+    send_available_with_data: true
+    divergent_attestor_fraction: 0.01
+    disable_ihave_gossip: false

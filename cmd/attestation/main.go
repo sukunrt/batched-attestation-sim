@@ -42,6 +42,7 @@ func main() {
 		usePartialMessages   = flag.Bool("use-partial-messages", false, "Use partial messages (list of attestor IDs + ephemeral iwant)")
 		partialPriority      = flag.Bool("partial-priority", false, "Use partial-priority forwarding (size-capped, least-forwarded-first)")
 		maxAttsPerMessage    = flag.Int("max-attestations-per-message", 0, "Max attestations per outgoing partial-priority data message (0 = default)")
+		sendAvailWithData    = flag.Bool("send-available-with-data", false, "Piggyback our validated bitmap onto the first data message to each mesh peer per tick (partial-priority only)")
 		gossipsubParams      = flag.String("gossipsub-params", "", "Per-node gossipsub mesh override, e.g. Dlow:8,D:12,Dhigh:16; empty uses the config value")
 	)
 	flag.Parse()
@@ -78,6 +79,7 @@ func main() {
 
 	usePartial := *usePartialMessages || sim.UsePartialMessages
 	usePriority := *partialPriority || sim.PartialPriorityMode
+	sendAvailWithDataOn := *sendAvailWithData || sim.SendAvailableWithData
 	memberships := parseCommitteeMemberships(*committeeMemberships)
 	for _, m := range memberships {
 		if m.TopicIndex < 0 || m.TopicIndex >= numTopics {
@@ -106,6 +108,7 @@ func main() {
 		UsePartialMessages:         usePartial,
 		PartialPriorityMode:        usePriority,
 		MaxAttestationsPerMessage:  sim.EffectiveMaxAttestationsPerMessage(),
+		SendAvailableWithData:      sendAvailWithDataOn,
 		AttestationDataSize:        sim.AttestationDataSize,
 		SignatureSize:              sim.SignatureSize,
 		MaxPeersPerAttestation:     sim.EffectiveMaxPeersPerAttestation(),

@@ -130,6 +130,9 @@ class AttestationSimConfig(BaseModel):
     # data message (0 = default 30).
     partial_priority: bool = False
     max_attestations_per_message: int = 30
+    # Partial-priority only: piggyback our validated bitmap onto the first data
+    # message to each mesh peer per tick so peers stop forwarding us duplicates.
+    send_available_with_data: bool = False
 
 
 class AttestationConfig(BaseModel):
@@ -184,6 +187,9 @@ class AttestationSimParams(BaseModel):
     # data message (0 = default 30).
     partial_priority: bool = False
     max_attestations_per_message: int = 30
+    # Partial-priority only: piggyback our validated bitmap onto the first data
+    # message to each mesh peer per tick so peers stop forwarding us duplicates.
+    send_available_with_data: bool = False
 
 
 class AttestationExperimentConfig(BaseModel):

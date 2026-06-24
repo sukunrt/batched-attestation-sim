@@ -43,6 +43,11 @@ type SimConfig struct {
 	// per outgoing data message (0 = default).
 	PartialPriorityMode       bool `yaml:"partial_priority"`
 	MaxAttestationsPerMessage int  `yaml:"max_attestations_per_message"`
+
+	// SendAvailableWithData (partial-priority only) piggybacks our validated
+	// bitmap onto the first data message to each mesh peer per tick, so peers
+	// stop forwarding duplicates back. The bitmap is never sent without data.
+	SendAvailableWithData bool `yaml:"send_available_with_data"`
 }
 
 func (s *SimConfig) PublishInterval() time.Duration {

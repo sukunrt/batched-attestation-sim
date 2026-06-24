@@ -85,6 +85,7 @@ def _sim_params_to_config(
             use_partial_messages=params.use_partial_messages,
             partial_priority=params.partial_priority,
             max_attestations_per_message=params.max_attestations_per_message,
+            send_available_with_data=params.send_available_with_data,
         )
     )
 

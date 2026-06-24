@@ -158,12 +158,22 @@ usual. Enable it with:
 ```yaml
 partial_priority: true
 max_attestations_per_message: 30  # optional, default 30
+send_available_with_data: true    # optional, default false
 ```
 
 It is a drop-in alternative to partial mode, so experiments can compare classic vs partial vs
 partial-priority the same way classic-vs-partial is compared today. Set `max_peers_per_attestation`
 generously (≥ D) in partial-priority configs — it stays the only volume throttle (the per-position
 lifetime ceiling).
+
+`send_available_with_data: true` (default off) piggybacks the node's own validated bitmap onto a
+mesh peer's data message so peers learn our state and stop forwarding us attestations we already
+hold. It is attached only when we still hold more than fits the message (otherwise the data already
+conveys our state), at most once per peer per tick, and only on a message that also carries data
+(never on its own), so a mesh peer is not mistaken for a pull-only gossip peer. Note: at full
+2000-attestor load this measured neutral — no tail improvement and no drop in duplicate receives,
+for ~+30–46% control bytes — because that tail is throughput-bound, not knowledge-bound. Kept
+default-off as a tool to revisit.
 
 ## Analysis
 

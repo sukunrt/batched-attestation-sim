@@ -419,6 +419,156 @@ func TestPriorityRoundRobinSpreadsAcrossPeers(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// SendAvailableWithData — piggyback our validated bitmap onto a mesh peer's data
+// message, but ONLY when we still hold more the peer needs beyond that message,
+// so peers stop forwarding us duplicates without paying for redundant bitmaps.
+// -----------------------------------------------------------------------------
+
+// (a) When we hold more than fits one message, the first data message to a mesh
+// peer carries our full validated bitmap; later messages that tick carry data only.
+func TestPriorityAvailablePiggybackedOnFirstMeshMessage(t *testing.T) {
+	m := newPriorityUnitManager(t) // MaxPeers=64, N=30
+	m.node.SendAvailableWithData = true
+	sendCounts := map[int]int{}
+	for pos := range 50 {
+		sendCounts[pos] = 0
+	}
+	seedValidated(m, "t0", 1, []byte("d"), sendCounts)
+
+	out := runPriorityPublishActions(t, m, "t0", 1, makePeers(1, false), peerAcceptsPartial)
+	actions := dataActions(out[peer.ID("p0")])
+	require.Len(t, actions, 2, "50 positions at N=30 => two data messages")
+
+	require.NotNil(t, actions[0].ctrl, "first message carries our available bitmap")
+	require.Len(t, actions[0].ctrl.Metadatas, 1)
+	md := actions[0].ctrl.Metadatas[0]
+	assert.Equal(t, []byte("d"), md.AttestationData)
+	assert.Equal(t, bitmapWith(intRange(0, 50)...), md.Available, "advertises every validated position")
+	assert.Empty(t, md.Requests, "available piggyback never carries requests")
+
+	assert.Nil(t, actions[1].ctrl, "second message to the same peer carries data only")
+}
+
+// (a2) The gate: when everything we hold for the peer fits in a single message
+// (nothing extra to send), the bitmap is NOT attached — the data conveys our
+// state, so the advertisement would be pure overhead.
+func TestPriorityNoBitmapWhenNothingExtraToSend(t *testing.T) {
+	m := newPriorityUnitManager(t) // MaxPeers=64, N=30
+	m.node.SendAvailableWithData = true
+	sendCounts := map[int]int{}
+	for pos := range 10 { // 10 < N=30 => one chunk drains everything, more=false
+		sendCounts[pos] = 0
+	}
+	seedValidated(m, "t0", 1, []byte("d"), sendCounts)
+
+	out := runPriorityPublishActions(t, m, "t0", 1, makePeers(1, false), peerAcceptsPartial)
+	actions := dataActions(out[peer.ID("p0")])
+	require.Len(t, actions, 1, "10 positions fit one message")
+	assert.Len(t, dataPositionsInOrder(actions[0]), 10)
+	assert.Nil(t, actions[0].ctrl, "no extra to send => no bitmap")
+}
+
+// (b) The bitmap is never sent without data: a mesh peer that already holds
+// everything we have gets no message at all (no metadata-only send).
+func TestPriorityNoMetadataOnlySendToMeshPeer(t *testing.T) {
+	m := newPriorityUnitManager(t)
+	m.node.SendAvailableWithData = true
+	sendCounts := map[int]int{}
+	for pos := range 10 {
+		sendCounts[pos] = 0
+	}
+	seedValidated(m, "t0", 1, []byte("d"), sendCounts)
+
+	// Mesh peer already has all 10 positions, so there is no data to send it.
+	m.mu.Lock()
+	b := m.getSlotState("t0", 1).attestationsMap["d"]
+	bps := initAndGetPeerAttestationState(b, peer.ID("p0"), testCommitteeSize)
+	for pos := range 10 {
+		bps.available.Set(pos)
+	}
+	m.mu.Unlock()
+
+	out := runPriorityPublishActions(t, m, "t0", 1, makePeers(1, false), peerAcceptsPartial)
+	assert.Empty(t, out[peer.ID("p0")], "no data => no message at all (bitmap never rides an empty message)")
+}
+
+// (c) Gossip peers are skipped by the piggyback — their available comes via the
+// separate metadata-only action, so their data chunks carry no piggybacked bitmap.
+func TestPriorityNoPiggybackForGossipPeer(t *testing.T) {
+	m := newPriorityUnitManager(t)
+	m.node.SendAvailableWithData = true
+	sendCounts := map[int]int{}
+	for pos := range 40 {
+		sendCounts[pos] = 0
+	}
+	seedValidated(m, "t0", 1, []byte("d"), sendCounts)
+
+	// Gossip peer requests positions 0..39 (advertises no Available), so it
+	// receives data but no metadata of its own.
+	m.mu.Lock()
+	b := m.getSlotState("t0", 1).attestationsMap["d"]
+	bps := initAndGetPeerAttestationState(b, peer.ID("p0"), testCommitteeSize)
+	for _, pos := range intRange(0, 40) {
+		bps.pendingWant.Set(pos)
+	}
+	m.mu.Unlock()
+
+	peers := map[peer.ID]peerState{peer.ID("p0"): {gossipPeer: true}}
+	out := runPriorityPublishActions(t, m, "t0", 1, peers, peerAcceptsPartial)
+	actions := out[peer.ID("p0")]
+
+	require.NotEmpty(t, dataActions(actions), "gossip peer still receives its requested data")
+	assert.Empty(t, metadataActions(actions), "no available is piggybacked onto a gossip peer's data")
+}
+
+// (d) Receiver: an RPC carrying BOTH metadata (Available) AND data must NOT
+// reclassify the sender as a gossip peer, but must still record its Available. A
+// follow-up metadata-only RPC does mark the sender as gossip.
+func TestPriorityDataWithAvailableDoesNotReclassifyAsGossip(t *testing.T) {
+	m := newPriorityUnitManager(t)
+	topic := "t0"
+	pid := peer.ID("p1")
+	peers := map[peer.ID]peerState{pid: {}}
+
+	md := &pb.CommitteeAttestationPartsMetadata{
+		Slot:            1,
+		AttestationData: []byte("d"),
+		Available:       bitmapWith(1, 2),
+	}
+	batch := &pb.BatchedAttestation{
+		AttestationData: []byte("d"),
+		AttestorIndices: indicesOf(5),
+		Signatures:      [][]byte{[]byte("s5")},
+	}
+	rpc := &pubsub_pb.PartialMessagesExtension{
+		TopicID:        &topic,
+		GroupID:        slotGroupID(1),
+		PartsMetadata:  encodeControl(t, []*pb.CommitteeAttestationPartsMetadata{md}),
+		PartialMessage: encodeData(t, []*pb.BatchedAttestation{batch}),
+	}
+	require.NoError(t, m.onIncomingRPC(pid, peers, rpc))
+
+	assert.False(t, peers[pid].gossipPeer, "data+available RPC must not reclassify a mesh peer as gossip")
+
+	m.mu.Lock()
+	bps := m.getSlotState(topic, 1).attestationsMap["d"].peers[pid]
+	require.NotNil(t, bps)
+	assert.True(t, bps.available.Get(1), "available from metadata recorded")
+	assert.True(t, bps.available.Get(2), "available from metadata recorded")
+	assert.True(t, bps.available.Get(5), "available inferred from received data")
+	m.mu.Unlock()
+
+	// A metadata-only RPC (no data) does mark the sender as a gossip peer.
+	rpcMetaOnly := &pubsub_pb.PartialMessagesExtension{
+		TopicID:       &topic,
+		GroupID:       slotGroupID(1),
+		PartsMetadata: encodeControl(t, []*pb.CommitteeAttestationPartsMetadata{{Slot: 1, AttestationData: []byte("d"), Available: bitmapWith(3)}}),
+	}
+	require.NoError(t, m.onIncomingRPC(pid, peers, rpcMetaOnly))
+	assert.True(t, peers[pid].gossipPeer, "metadata-only RPC marks the sender as a gossip peer")
+}
+
+// -----------------------------------------------------------------------------
 // Index invariant helpers (test-only).
 // -----------------------------------------------------------------------------
 
@@ -533,7 +683,7 @@ func (c *batchSizeRPCTracer) OnRPCSent(_ peer.ID, _ time.Duration, rpc *pubsub_p
 	}
 }
 
-func (c *batchSizeRPCTracer) OnRPCReceived(peer.ID, time.Duration, *pubsub_pb.RPC) {}
+func (c *batchSizeRPCTracer) OnRPCReceived(peer.ID, time.Duration, *pubsub_pb.RPC)     {}
 func (c *batchSizeRPCTracer) OnPeerRTT(peer.ID, string, time.Duration, string, string) {}
 func (c *batchSizeRPCTracer) OnMeshSize(string, int)                                   {}
 func (c *batchSizeRPCTracer) Close() error                                             { return nil }

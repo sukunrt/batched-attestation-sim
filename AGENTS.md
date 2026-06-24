@@ -165,6 +165,7 @@ Do not set `disable_ihave_gossip: true` unless the user wants the no-IHAVE varia
 ```yaml
 partial_priority: true
 max_attestations_per_message: 30  # optional, default 30 (the per-message size cap N)
+send_available_with_data: true    # optional, default false; see below
 ```
 
 It is a drop-in alternative to partial mode over the same libp2p partial-messages extension (same
@@ -178,6 +179,25 @@ spreading scarce attestations across peers instead of draining one peer fully fi
 `available`/`requests` advertisement is its own separate metadata-only message. Nothing sendable is
 dropped — N caps message size, not per-tick volume; `max_peers_per_attestation` stays the only
 volume throttle (the per-position lifetime ceiling), so set it generously (≥ D).
+
+`send_available_with_data: true` (partial-priority only, default false) piggybacks the node's own
+validated bitmap (its `available` for every bucket) onto a mesh peer's data message, so the peer
+learns our full state and stops forwarding us positions we already hold. The bitmap is attached
+**only when we still hold more positions the peer needs than fit in this message** (`more` from
+`selectOneChunkForPeer`) — if the message already carries everything we have for the peer, the data
+itself conveys our state and the bitmap would be pure overhead. It is sent at most once per peer per
+tick, rides the same RPC as the data (one `CommitteeAttestationPartsMetadata` per bucket,
+`available` only), and is never a standalone message. That last point is required: a peer is
+classified as a **gossip peer** when it sends a **metadata-only** RPC, so the receiver only flips a
+sender to gossip when the RPC carries no data batches — a mesh peer's available-plus-data piggyback
+keeps it classified as mesh. Gossip peers are skipped (they already get `available` via their
+separate metadata-only message).
+
+**Measured neutral at full load.** At 500-mesh / 2000-attestor / 2-topic load this did **not** cut
+the straggler tail or reduce duplicate receives (`att_recv` flat) — it added ~+30–46% control bytes
+for no latency change. That tail is throughput/mop-up bound (see `ideas/analysis-straggler.md`), not
+knowledge-bound, so advertising state doesn't help there. Kept default-off as a tool to revisit at
+lower D or against the throughput angle.
 
 Implementation: `cmd/attestation/node/partial_priority.go` (`priorityAttestationManager`). It
 **reuses** partial.go's data model (`AttestationState`, `peerState`, `peerAttestationState`,
