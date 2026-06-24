@@ -1,7 +1,7 @@
 // Package attprop implements the att_propagation attestation-broadcast mode: a
-// native libp2p protocol (no gossipsub) with three persistent per-topic streams
-// between peers — push (data forwarding), bitmap (validated-bitmap
-// advertisement), and control (graft/prune mesh management). Each peer is
+// native libp2p protocol (no gossipsub) with three persistent bidirectional
+// per-topic streams between peers: push (data forwarding), bitmap
+// (validated-bitmap advertisement), and control (graft/prune mesh management). Each peer is
 // Connected, in the Push Mesh, or in the Bitmap Mesh. The push mesh is roughly
 // half of gossipsub's D and pushes all data blindly; the cheap bitmap mesh
 // learns who holds what so spare upload can push the scarcest attestations to
@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -142,6 +143,12 @@ type Manager struct {
 	// tickEvent's selection pass so partial push batches flush on the tick;
 	// false otherwise. Never observed across a channel hop.
 	sendAllToPushMesh bool
+
+	// streamsMu guards stream setup state, which is intentionally outside the
+	// eventloop because NewStream and inbound handlers run on libp2p goroutines.
+	streamsMu sync.Mutex
+	opening   map[peer.ID]struct{}
+	pending   map[peer.ID]*peerStreams
 }
 
 // New constructs an att_propagation Manager. The node layer wires in the host,
@@ -172,18 +179,41 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 		controlWriters: make(map[peer.ID]*peerSender),
 		mesh:           newMeshState(cfg),
 		slots:          make(map[string]map[int]*slotState),
+		opening:        make(map[peer.ID]struct{}),
+		pending:        make(map[peer.ID]*peerStreams),
 	}
 }
 
+// markSendStreamsOpening claims the right to open the peer's bidirectional
+// stream set, returning false if another goroutine already claimed it. Cleared
+// by clearSendStreamsOpening on a failed open so a retry can proceed.
+func (m *Manager) markSendStreamsOpening(p peer.ID) bool {
+	m.streamsMu.Lock()
+	defer m.streamsMu.Unlock()
+	if _, ok := m.opening[p]; ok {
+		return false
+	}
+	m.opening[p] = struct{}{}
+	return true
+}
+
+// clearSendStreamsOpening releases stream setup state so a reconnect can retry.
+func (m *Manager) clearSendStreamsOpening(p peer.ID) {
+	m.streamsMu.Lock()
+	delete(m.opening, p)
+	delete(m.pending, p)
+	m.streamsMu.Unlock()
+}
+
 // Start registers the three per-topic stream handlers on the host so inbound
-// streams from the higher-peerID side are accepted. Implemented in wire.go.
+// bidirectional streams are accepted. Implemented in wire.go.
 func (m *Manager) Start(ctx context.Context) {
 	m.start(ctx)
 }
 
-// ConnectPeer is called after the host has connected to a peer. If we are the
-// opener (lower peer ID) it opens the three streams and emits a peerUpEvent;
-// otherwise it relies on the inbound handler registered by Start. Implemented
+// ConnectPeer is called after the host has connected to a peer. The caller's
+// side opens the three bidirectional streams and emits a peerUpEvent; the peer
+// accepts those same streams via the handlers registered by Start. Implemented
 // in wire.go.
 func (m *Manager) ConnectPeer(p peer.ID) {
 	m.connectPeer(p)

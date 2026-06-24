@@ -234,9 +234,10 @@ attprop_prune_backoff_seconds: 0
 ```
 
 It is mutually exclusive with `use_partial_messages` and `partial_priority` (the Go side fatals on
-the combination; simctl's Pydantic models also reject it early). Each node opens **three persistent
-per-topic streams** — push (eager batched data), bitmap (periodic have-set advertisement), and
-control (graft/prune mesh maintenance) — rather than relying on gossipsub's IHAVE/IWANT. Forwarding
+the combination; simctl's Pydantic models also reject it early). Each peer connection uses **three
+persistent bidirectional per-topic streams** — push (eager batched data), bitmap (periodic have-set
+advertisement), and control (graft/prune mesh maintenance) — rather than relying on gossipsub's
+IHAVE/IWANT. Forwarding
 is driven by **holder-count scarcity**: a node prefers pushing the attestations the fewest of its
 peers are known to hold, throttled by the send budget `B` and the per-position lifetime ceiling
 `attprop_max_peers_per_att`.

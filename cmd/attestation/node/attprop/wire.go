@@ -14,11 +14,11 @@ import (
 )
 
 // wire.go is the att_propagation stream substrate: varint-length-prefixed
-// protobuf framing over persistent libp2p streams (the same go-msgio wire
-// format gossipsub uses), the three per-topic protocol-ID handlers, the
-// lower-peerID-opens dial logic, and the per-stream reader goroutines that
-// decode frames into events. It owns no Manager state beyond posting to the
-// events channel; the eventloop (Core) is the sole state owner.
+// protobuf framing over persistent bidirectional libp2p streams (the same
+// go-msgio wire format gossipsub uses), the three per-topic protocol-ID
+// handlers, the dial logic, and the per-stream reader goroutines that decode
+// frames into events. It owns no attestation state beyond posting to the events
+// channel; the eventloop (Core) is the sole protocol-state owner.
 
 // streamKind tags which of the three per-topic streams a reader is draining, so
 // it can decode each frame into the right protobuf type and post the matching
@@ -30,6 +30,10 @@ const (
 	kindBitmap
 	kindControl
 )
+
+type peerStreams struct {
+	push, bitmap, control network.Stream
+}
 
 // writeFrame writes one varint-length-prefixed protobuf frame. Blocks under a
 // full QUIC flow-control window — that block is the send backpressure signal.
@@ -44,9 +48,9 @@ func (m *Manager) newFrameReader(s network.Stream) msgio.ReadCloser {
 }
 
 // start registers the three per-topic inbound stream handlers on the host. Each
-// handler spawns a reader goroutine that drains framed messages off the
-// accepted stream until the remote half-closes (EOF) or resets. The opener
-// (lower peer ID) dials in connectPeer; this side receives.
+// handler records the accepted bidirectional stream as a writer and spawns a
+// reader goroutine that drains framed messages until the remote half-closes
+// (EOF) or resets.
 func (m *Manager) start(ctx context.Context) {
 	for topicIdx := range m.cfg.Topics {
 		m.host.SetStreamHandler(PushProtocol(topicIdx), m.inboundHandler(ctx, kindPush))
@@ -55,35 +59,51 @@ func (m *Manager) start(ctx context.Context) {
 	}
 }
 
-// inboundHandler returns a network.StreamHandler that starts a reader goroutine
-// for an accepted stream of the given kind.
+// inboundHandler returns a network.StreamHandler for an accepted stream of the
+// given kind. The accepted QUIC stream is bidirectional: we read peer frames from
+// it and, once all three message-type streams are accepted, use the same streams
+// for writes back to that peer.
 func (m *Manager) inboundHandler(ctx context.Context, kind streamKind) network.StreamHandler {
 	return func(s network.Stream) {
-		go m.readLoop(ctx, s, s.Conn().RemotePeer(), kind)
+		p := s.Conn().RemotePeer()
+		if streams, ok := m.recordInboundStream(p, kind, s); ok {
+			m.post(peerUpEvent{
+				peer:    p,
+				push:    streams.push,
+				bitmap:  streams.bitmap,
+				control: streams.control,
+			})
+		}
+		go m.readLoop(ctx, s, p, kind)
 	}
 }
 
-// connectPeer opens the three per-topic streams to a peer when we are the
-// opener (lower peer ID) and emits a peerUpEvent carrying them. When we are not
-// the opener we do nothing here — the peer dials us and our inbound handlers
-// accept. Topic 0 is used for the (currently single-topic) sim; the per-topic
-// stream set generalises by topic index.
+// connectPeer opens our three bidirectional streams to a peer after the host has
+// connected. The accepting side uses those same streams for its writes; it does
+// not open a second stream set back.
 func (m *Manager) connectPeer(p peer.ID) {
-	if !weOpen(m.self, p) {
-		return
-	}
-	ctx := context.Background()
-	const topicIdx = 0
+	go m.openSendStreams(context.Background(), p)
+}
 
+// openSendStreams opens this node's three bidirectional streams to a peer, starts
+// readers for the peer's frames on those same streams, and posts a peerUpEvent
+// carrying the writers. The once map guards against opening twice.
+func (m *Manager) openSendStreams(ctx context.Context, p peer.ID) {
+	if !m.markSendStreamsOpening(p) {
+		return // already opening/open for this peer
+	}
+	const topicIdx = 0
 	push, err := m.host.NewStream(ctx, p, PushProtocol(topicIdx))
 	if err != nil {
 		m.logger.Error("open push stream", "peer", shortPeer(p), "err", err)
+		m.clearSendStreamsOpening(p)
 		return
 	}
 	bm, err := m.host.NewStream(ctx, p, BitmapProtocol(topicIdx))
 	if err != nil {
 		m.logger.Error("open bitmap stream", "peer", shortPeer(p), "err", err)
 		push.Reset()
+		m.clearSendStreamsOpening(p)
 		return
 	}
 	ctrl, err := m.host.NewStream(ctx, p, ControlProtocol(topicIdx))
@@ -91,16 +111,43 @@ func (m *Manager) connectPeer(p peer.ID) {
 		m.logger.Error("open control stream", "peer", shortPeer(p), "err", err)
 		push.Reset()
 		bm.Reset()
+		m.clearSendStreamsOpening(p)
 		return
 	}
-
-	// The opener also receives on these streams (symmetric meshes), so start a
-	// reader for each direction we opened.
 	go m.readLoop(ctx, push, p, kindPush)
 	go m.readLoop(ctx, bm, p, kindBitmap)
 	go m.readLoop(ctx, ctrl, p, kindControl)
-
 	m.post(peerUpEvent{peer: p, push: push, bitmap: bm, control: ctrl})
+}
+
+// recordInboundStream collects the three accepted bidirectional streams for one
+// peer. It returns a complete set exactly once, when push/bitmap/control are all
+// present; fanout's one-shot push stream never completes a set, which is fine
+// because receivers do not write back to fanout leaves.
+func (m *Manager) recordInboundStream(
+	p peer.ID, kind streamKind, s network.Stream,
+) (*peerStreams, bool) {
+	m.streamsMu.Lock()
+	defer m.streamsMu.Unlock()
+
+	streams := m.pending[p]
+	if streams == nil {
+		streams = &peerStreams{}
+		m.pending[p] = streams
+	}
+	switch kind {
+	case kindPush:
+		streams.push = s
+	case kindBitmap:
+		streams.bitmap = s
+	case kindControl:
+		streams.control = s
+	}
+	if streams.push == nil || streams.bitmap == nil || streams.control == nil {
+		return nil, false
+	}
+	delete(m.pending, p)
+	return streams, true
 }
 
 // readLoop drains framed messages off one stream, decodes each into the

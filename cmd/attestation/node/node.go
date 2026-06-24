@@ -291,6 +291,12 @@ func (n *Node) startAttProp(ctx context.Context) {
 	}
 	n.attProp = attprop.New(n.Host, n.verifier, n.attPropTracer(), cfg)
 	n.attProp.Start(ctx)
+	// Run the eventloop under the node's lifecycle context, not a short-lived one
+	// scoped to Run(): it must outlive Run so post-run reads (e.g. ValidatedCount
+	// in tests) still reach the eventloop. Cancelling ctx (process shutdown / test
+	// cleanup) tears down the eventloop; the verifier stops with it.
+	go n.attProp.Run(ctx)
+	context.AfterFunc(ctx, n.verifier.Stop)
 
 	n.logger.Info("started", "fanout", n.Fanout, "mode", "att_propagation")
 }
@@ -383,8 +389,8 @@ func (n *Node) ConnectToPeers(peers []int) {
 			}
 			n.logger.Info("connected", "peer", peerNum)
 			if n.AttPropagation {
-				// Opener side (lower peer ID) opens the three streams; the higher
-				// side relies on its inbound handlers.
+				// The connecting side opens one bidirectional stream per message type;
+				// the peer uses those same streams through its inbound handlers.
 				n.attProp.ConnectPeer(peerID)
 			}
 		})
@@ -599,10 +605,9 @@ func (n *Node) selfPublish(slot int) {
 // publish slot, then drain and stop. The mode shares partial mode's slot
 // timing and self-publish log keys (§H2) so analysis parsing is unchanged.
 func (n *Node) runAttProp(numSlots int, slotDuration time.Duration) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	go n.attProp.Run(ctx)
-
+	// The eventloop and verifier are started in startAttProp under the node's
+	// lifecycle context and torn down when it is cancelled, so this only drives
+	// the publish schedule and then drains.
 	for slot := 1; slot <= numSlots; slot++ {
 		n.logger.Info("starting slot", "slot", slot)
 		slotEndTime := time.Now().Add(slotDuration)
@@ -616,8 +621,6 @@ func (n *Node) runAttProp(numSlots int, slotDuration time.Duration) {
 	}
 
 	time.Sleep(slotDuration)
-	n.verifier.Stop()
-	cancel()
 }
 
 // selfPublishAttProp injects this node's own attestation into attprop for each

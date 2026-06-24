@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -22,7 +23,11 @@ func intgCfg(fanout bool) Config {
 	c := testCfg()
 	// Debug-level logger to a discard writer: keeps test output clean while still
 	// exercising every log call. Swap io.Discard for os.Stderr to debug.
-	c.Logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var w io.Writer = io.Discard
+	if os.Getenv("ATTPROP_LOG") != "" {
+		w = os.Stderr
+	}
+	c.Logger = slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	c.Topics = []string{"t0"}
 	c.CommitteeSize = testCommittee
 	c.SendBudgetB = 4

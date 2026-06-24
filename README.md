@@ -178,9 +178,9 @@ default-off as a tool to revisit.
 ### att_propagation
 
 `att_propagation` is a third forwarding mode that replaces GossipSub with a native libp2p protocol.
-Each node keeps three persistent per-topic streams — push (eager batched data), bitmap (periodic
-have-set advertisement), and control (mesh graft/prune) — and forwards by holder-count scarcity
-(prefer the attestations the fewest peers are known to hold). Enable it with:
+Each peer connection keeps three persistent bidirectional per-topic streams — push (eager batched
+data), bitmap (periodic have-set advertisement), and control (mesh graft/prune) — and forwards by
+holder-count scarcity (prefer the attestations the fewest peers are known to hold). Enable it with:
 
 ```yaml
 att_propagation: true

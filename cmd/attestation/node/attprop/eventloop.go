@@ -53,9 +53,9 @@ type sendDoneEvent struct {
 	peer peer.ID
 }
 
-// peerUpEvent signals that the three streams to/from a peer are established.
-// For the opener side the streams were dialed; for the receiver side they were
-// accepted by the stream handlers.
+// peerUpEvent signals that the three bidirectional streams to/from a peer are
+// established. For the opener side the streams were dialed; for the receiver
+// side they were accepted by the stream handlers.
 type peerUpEvent struct {
 	peer                  peer.ID
 	push, bitmap, control network.Stream
@@ -127,6 +127,7 @@ func (heartbeatEvent) isEvent()      {}
 // control writers reuse this type but bypass the budget.
 type peerSender struct {
 	peer     peer.ID
+	stream   network.Stream
 	w        msgio.WriteCloser
 	work     chan []byte
 	inFlight bool
@@ -143,7 +144,12 @@ type peerSender struct {
 // signal back, so they use a deeper buffer and a non-blocking enqueue (see
 // tryEnqueue) — the eventloop must never block handing off (§F4).
 func (m *Manager) newPeerSender(p peer.ID, s network.Stream, buf int, done func()) *peerSender {
-	ps := &peerSender{peer: p, w: msgio.NewVarintWriter(s), work: make(chan []byte, buf)}
+	ps := &peerSender{
+		peer:   p,
+		stream: s,
+		w:      msgio.NewVarintWriter(s),
+		work:   make(chan []byte, buf),
+	}
 	go func() {
 		for f := range ps.work {
 			if err := writeFrame(ps.w, f); err != nil {
@@ -157,6 +163,13 @@ func (m *Manager) newPeerSender(p peer.ID, s network.Stream, buf int, done func(
 		}
 	}()
 	return ps
+}
+
+func (s *peerSender) closeAndReset() {
+	close(s.work)
+	if s.stream != nil {
+		s.stream.Reset()
+	}
 }
 
 // tryEnqueue hands a frame to a budget-bypassing writer (bitmap/control) without
@@ -196,7 +209,8 @@ func (m *Manager) driveTimer(ctx context.Context, interval time.Duration, mk fun
 // run is the single-owner eventloop. All mutable Manager state is touched only
 // here (no mutex). It processes one event at a time and re-runs trySelectAndSend
 // on every event that can change what's sendable. On ctx cancel it closes every
-// writer's work chan (senders exit their range) and stops.
+// writer's work chan (senders exit their range), resets the open streams, and
+// stops.
 func (m *Manager) run(ctx context.Context) {
 	for {
 		select {
@@ -215,6 +229,7 @@ func (m *Manager) dispatch(ev event) {
 	switch e := ev.(type) {
 	case peerUpEvent:
 		m.onPeerUp(e)
+		m.trySelectAndSend()
 	case peerDownEvent:
 		m.onPeerDown(e)
 	case inboundControlEvent:
@@ -249,25 +264,31 @@ func (m *Manager) dispatch(ev event) {
 // range, and resets the open streams. Readers exit on the resulting EOF/reset.
 func (m *Manager) shutdown() {
 	for _, s := range m.senders {
-		close(s.work)
+		s.closeAndReset()
 	}
 	for _, s := range m.bitmapWriters {
-		close(s.work)
+		s.closeAndReset()
 	}
 	for _, s := range m.controlWriters {
-		close(s.work)
+		s.closeAndReset()
 	}
 }
 
 // onPeerUp registers the three per-peer stream writers. Data goes on the push
 // stream (its sends raise sendDoneEvent so the budget re-selects); bitmap and
 // control writers bypass the budget, so they pass a nil done callback.
+// Idempotent: if a peer accidentally opens a second set, reset the duplicate.
 func (m *Manager) onPeerUp(e peerUpEvent) {
 	p := e.peer
 	if _, ok := m.senders[p]; ok {
+		e.push.Reset()
+		e.bitmap.Reset()
+		e.control.Reset()
 		return // already up (duplicate event)
 	}
-	m.senders[p] = m.newPeerSender(p, e.push, 1, func() { m.post(sendDoneEvent{peer: p}) })
+	m.senders[p] = m.newPeerSender(p, e.push, 1, func() {
+		m.post(sendDoneEvent{peer: p})
+	})
 	m.bitmapWriters[p] = m.newPeerSender(p, e.bitmap, writerBuf, nil)
 	m.controlWriters[p] = m.newPeerSender(p, e.control, writerBuf, nil)
 	m.mesh.roles[p] = roleConnected
@@ -286,18 +307,21 @@ func (m *Manager) onPeerDown(e peerDownEvent) {
 		if s.inFlight {
 			m.activeData--
 		}
-		close(s.work)
+		s.closeAndReset()
 		delete(m.senders, p)
 	}
 	if s, ok := m.bitmapWriters[p]; ok {
-		close(s.work)
+		s.closeAndReset()
 		delete(m.bitmapWriters, p)
 	}
 	if s, ok := m.controlWriters[p]; ok {
-		close(s.work)
+		s.closeAndReset()
 		delete(m.controlWriters, p)
 	}
 	delete(m.mesh.roles, p)
+	// Release the open-claim so a reconnect (a fresh inbound stream) re-opens our
+	// outbound set instead of being suppressed by a stale claim.
+	m.clearSendStreamsOpening(p)
 }
 
 // onSendDone clears a peer's data in-flight flag, releases its budget charge,

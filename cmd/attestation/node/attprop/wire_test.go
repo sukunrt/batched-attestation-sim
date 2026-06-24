@@ -114,12 +114,12 @@ func waitEvent[T event](t *testing.T, m *Manager) T {
 	panic("unreachable")
 }
 
-// TestWireSubstrate is the Phase-1 substrate proof for att_propagation: open all
-// three per-topic streams between two hosts (lower-peerID opener), round-trip
-// one msgio-framed protobuf on each, assert the receiver's reader posts the
-// correct inbound event with intact contents, and assert CloseWrite drives the
-// readers to a clean exit (peerDownEvent, no error). The eventloop is not
-// running; the test reads each manager's events channel directly.
+// TestWireSubstrate is the Phase-1 substrate proof for att_propagation: open one
+// bidirectional stream per message type between two hosts, send one
+// msgio-framed protobuf in each direction on each stream, assert both readers
+// post intact inbound events, and assert CloseWrite drives readers to a clean
+// exit (peerDownEvent, no error). The eventloop is not running; the test reads
+// each manager's events channel directly.
 func TestWireSubstrate(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		nw := newSimNet(t, 2)
@@ -137,11 +137,13 @@ func TestWireSubstrate(t *testing.T) {
 		om := newTestManager(nw.hosts[opener])
 		rm := newTestManager(nw.hosts[receiver])
 
-		// Receiver registers its three inbound stream handlers.
+		// Receiver registers its three inbound stream handlers. The opener starts
+		// read loops on the streams it dials, so it does not need handlers here.
 		rm.Start(ctx)
 
 		// Dial the underlying connection, then drive the opener's ConnectPeer,
-		// which opens the three streams and posts a peerUpEvent carrying them.
+		// which opens the three bidirectional streams and posts a peerUpEvent
+		// carrying them.
 		recvPeerID := testPeerID(receiver)
 		require.NoError(t, nw.hosts[opener].Connect(ctx, peer.AddrInfo{
 			ID:    recvPeerID,
@@ -150,14 +152,17 @@ func TestWireSubstrate(t *testing.T) {
 		om.ConnectPeer(recvPeerID)
 
 		up := waitEvent[peerUpEvent](t, om)
+		openerPeerID := testPeerID(opener)
 		require.Equal(t, recvPeerID, up.peer)
 		require.NotNil(t, up.push)
 		require.NotNil(t, up.bitmap)
 		require.NotNil(t, up.control)
-
-		openerPeerID := testPeerID(opener)
-
-		// PUSH stream: one BatchedAttestationEnvelope.
+		rup := waitEvent[peerUpEvent](t, rm)
+		require.Equal(t, openerPeerID, rup.peer)
+		require.NotNil(t, rup.push)
+		require.NotNil(t, rup.bitmap)
+		require.NotNil(t, rup.control)
+		// PUSH stream: one BatchedAttestationEnvelope in each direction.
 		dataEnv := &pb.BatchedAttestationEnvelope{
 			Batches: []*pb.BatchedAttestation{{
 				AttestationData: []byte{0xaa},
@@ -171,8 +176,14 @@ func TestWireSubstrate(t *testing.T) {
 		require.Len(t, gotData.env.Batches, 1)
 		require.Equal(t, []uint32{7}, gotData.env.Batches[0].AttestorIndices)
 		require.Equal(t, []byte{0xaa}, gotData.env.Batches[0].AttestationData)
+		writeProto(t, rup.push, dataEnv)
+		gotData = waitEvent[inboundDataEvent](t, om)
+		require.Equal(t, recvPeerID, gotData.from)
+		require.Len(t, gotData.env.Batches, 1)
+		require.Equal(t, []uint32{7}, gotData.env.Batches[0].AttestorIndices)
+		require.Equal(t, []byte{0xaa}, gotData.env.Batches[0].AttestationData)
 
-		// BITMAP stream: one ControlEnvelope (available-only metadata).
+		// BITMAP stream: one ControlEnvelope (available-only metadata) each way.
 		bmEnv := &pb.ControlEnvelope{
 			Metadatas: []*pb.CommitteeAttestationPartsMetadata{{
 				Slot:            3,
@@ -186,8 +197,14 @@ func TestWireSubstrate(t *testing.T) {
 		require.Len(t, gotBM.ctrl.Metadatas, 1)
 		require.EqualValues(t, 3, gotBM.ctrl.Metadatas[0].Slot)
 		require.Equal(t, []byte{0x80}, gotBM.ctrl.Metadatas[0].Available)
+		writeProto(t, rup.bitmap, bmEnv)
+		gotBM = waitEvent[inboundBitmapEvent](t, om)
+		require.Equal(t, recvPeerID, gotBM.from)
+		require.Len(t, gotBM.ctrl.Metadatas, 1)
+		require.EqualValues(t, 3, gotBM.ctrl.Metadatas[0].Slot)
+		require.Equal(t, []byte{0x80}, gotBM.ctrl.Metadatas[0].Available)
 
-		// CONTROL stream: one AttPropControl (graft/prune).
+		// CONTROL stream: one AttPropControl (graft/prune) each way.
 		ctrlMsg := &pb.AttPropControl{
 			Items: []*pb.AttPropControlItem{
 				{Op: pb.AttPropMeshOp_GRAFT, Mesh: pb.AttPropMesh_PUSH},
@@ -201,9 +218,17 @@ func TestWireSubstrate(t *testing.T) {
 		require.Equal(t, pb.AttPropMeshOp_GRAFT, gotCtrl.ctrl.Items[0].Op)
 		require.Equal(t, pb.AttPropMesh_PUSH, gotCtrl.ctrl.Items[0].Mesh)
 		require.Equal(t, pb.AttPropMesh_BITMAP, gotCtrl.ctrl.Items[1].Mesh)
+		writeProto(t, rup.control, ctrlMsg)
+		gotCtrl = waitEvent[inboundControlEvent](t, om)
+		require.Equal(t, recvPeerID, gotCtrl.from)
+		require.Len(t, gotCtrl.ctrl.Items, 2)
+		require.Equal(t, pb.AttPropMeshOp_GRAFT, gotCtrl.ctrl.Items[0].Op)
+		require.Equal(t, pb.AttPropMesh_PUSH, gotCtrl.ctrl.Items[0].Mesh)
+		require.Equal(t, pb.AttPropMesh_BITMAP, gotCtrl.ctrl.Items[1].Mesh)
 
-		// Half-close every opener stream; each receiver reader should hit EOF
-		// and post exactly one peerDownEvent — a clean exit, no Reset/error.
+		// Half-close every opener stream; each receiver reader should hit EOF and
+		// post exactly one peerDownEvent — a clean exit, no Reset/error. The reader
+		// closes its local write side, so the opener readers exit too.
 		require.NoError(t, up.push.CloseWrite())
 		require.NoError(t, up.bitmap.CloseWrite())
 		require.NoError(t, up.control.CloseWrite())
@@ -211,6 +236,10 @@ func TestWireSubstrate(t *testing.T) {
 		for range 3 {
 			down := waitEvent[peerDownEvent](t, rm)
 			require.Equal(t, openerPeerID, down.peer)
+		}
+		for range 3 {
+			down := waitEvent[peerDownEvent](t, om)
+			require.Equal(t, recvPeerID, down.peer)
 		}
 
 		synctest.Wait()
