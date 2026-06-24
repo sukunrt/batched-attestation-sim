@@ -86,6 +86,19 @@ def _sim_params_to_config(
             partial_priority=params.partial_priority,
             max_attestations_per_message=params.max_attestations_per_message,
             send_available_with_data=params.send_available_with_data,
+            att_propagation=params.att_propagation,
+            attprop_push_dlow=params.attprop_push_dlow,
+            attprop_push_d=params.attprop_push_d,
+            attprop_push_dhigh=params.attprop_push_dhigh,
+            attprop_bitmap_low=params.attprop_bitmap_low,
+            attprop_bitmap_target=params.attprop_bitmap_target,
+            attprop_bitmap_high=params.attprop_bitmap_high,
+            attprop_send_budget_b=params.attprop_send_budget_b,
+            attprop_max_peers_per_att=params.attprop_max_peers_per_att,
+            attprop_tick_interval_ms=params.attprop_tick_interval_ms,
+            attprop_bitmap_floor_interval_ms=params.attprop_bitmap_floor_interval_ms,
+            attprop_heartbeat_interval_ms=params.attprop_heartbeat_interval_ms,
+            attprop_prune_backoff_seconds=params.attprop_prune_backoff_seconds,
         )
     )
 

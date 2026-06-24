@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class AlgorithmConfig(BaseModel):
@@ -134,6 +134,34 @@ class AttestationSimConfig(BaseModel):
     # message to each mesh peer per tick so peers stop forwarding us duplicates.
     send_available_with_data: bool = False
 
+    # att_propagation path: a native libp2p protocol (no gossipsub) with three
+    # per-topic streams (push / bitmap / control). Mutually exclusive with
+    # use_partial_messages and partial_priority. N reuses
+    # max_attestations_per_message. All tunables below are optional; 0 means the
+    # Go side applies the spec default.
+    att_propagation: bool = False
+    attprop_push_dlow: int = 0
+    attprop_push_d: int = 0
+    attprop_push_dhigh: int = 0
+    attprop_bitmap_low: int = 0
+    attprop_bitmap_target: int = 0
+    attprop_bitmap_high: int = 0
+    attprop_send_budget_b: int = 0
+    attprop_max_peers_per_att: int = 0
+    attprop_tick_interval_ms: int = 0
+    attprop_bitmap_floor_interval_ms: int = 0
+    attprop_heartbeat_interval_ms: int = 0
+    attprop_prune_backoff_seconds: int = 0
+
+    @model_validator(mode="after")
+    def _check_mode_exclusion(self) -> "AttestationSimConfig":
+        if self.att_propagation and (self.use_partial_messages or self.partial_priority):
+            raise ValueError(
+                "att_propagation is mutually exclusive with use_partial_messages and "
+                "partial_priority"
+            )
+        return self
+
 
 class AttestationConfig(BaseModel):
     """Root configuration for an attestation run."""
@@ -190,6 +218,31 @@ class AttestationSimParams(BaseModel):
     # Partial-priority only: piggyback our validated bitmap onto the first data
     # message to each mesh peer per tick so peers stop forwarding us duplicates.
     send_available_with_data: bool = False
+
+    # att_propagation path; see AttestationSimConfig. N reuses
+    # max_attestations_per_message; all tunables optional (0 = Go spec default).
+    att_propagation: bool = False
+    attprop_push_dlow: int = 0
+    attprop_push_d: int = 0
+    attprop_push_dhigh: int = 0
+    attprop_bitmap_low: int = 0
+    attprop_bitmap_target: int = 0
+    attprop_bitmap_high: int = 0
+    attprop_send_budget_b: int = 0
+    attprop_max_peers_per_att: int = 0
+    attprop_tick_interval_ms: int = 0
+    attprop_bitmap_floor_interval_ms: int = 0
+    attprop_heartbeat_interval_ms: int = 0
+    attprop_prune_backoff_seconds: int = 0
+
+    @model_validator(mode="after")
+    def _check_mode_exclusion(self) -> "AttestationSimParams":
+        if self.att_propagation and (self.use_partial_messages or self.partial_priority):
+            raise ValueError(
+                "att_propagation is mutually exclusive with use_partial_messages and "
+                "partial_priority"
+            )
+        return self
 
 
 class AttestationExperimentConfig(BaseModel):

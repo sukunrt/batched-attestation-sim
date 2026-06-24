@@ -224,7 +224,9 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
 
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
     sim = cfg["simulation"]
-    if sim.get("partial_priority"):
+    if sim.get("att_propagation"):
+        mode = "att-propagation"
+    elif sim.get("partial_priority"):
         mode = "partial-priority"
     elif sim.get("use_partial_messages"):
         mode = "partial"
@@ -283,8 +285,9 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
         else:
             d = {k: sum(node_bw[n][k] for n in nodes) / len(nodes) for k in keys}
         # Control received = IHAVE+IWANT in classic, parts metadata in the
-        # partial variants (partial and partial-priority).
-        if mode in ("partial", "partial-priority"):
+        # partial variants and att_propagation (no IHAVE/IWANT — control comes
+        # from the parts metadata / bitmap blobs).
+        if mode in ("partial", "partial-priority", "att-propagation"):
             d["control_recv"] = d["md_recv"]
         else:
             d["control_recv"] = d["ihave_recv"] + d["iwant_recv"]

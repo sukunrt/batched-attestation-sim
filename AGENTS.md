@@ -210,6 +210,51 @@ separate fields so tests can reach each one's internals. partial-priority emits 
 log/wire keys as partial mode, so analysis parsing is unchanged — only mode detection learns the
 third mode (`partial_priority` in config ⇒ `"partial-priority"`).
 
+### att_propagation
+
+`att_propagation` is a third forwarding mode that **drops gossipsub entirely** and runs a native
+libp2p protocol instead. Enable it with:
+
+```yaml
+att_propagation: true
+max_attestations_per_message: 30   # optional, the per-message size cap N (reused from partial-priority)
+# all tunables below are optional; 0 ⇒ the Go side applies the spec default
+attprop_push_dlow: 0
+attprop_push_d: 0
+attprop_push_dhigh: 0
+attprop_bitmap_low: 0
+attprop_bitmap_target: 0
+attprop_bitmap_high: 0
+attprop_send_budget_b: 0
+attprop_max_peers_per_att: 0
+attprop_tick_interval_ms: 0
+attprop_bitmap_floor_interval_ms: 0
+attprop_heartbeat_interval_ms: 0
+attprop_prune_backoff_seconds: 0
+```
+
+It is mutually exclusive with `use_partial_messages` and `partial_priority` (the Go side fatals on
+the combination; simctl's Pydantic models also reject it early). Each node opens **three persistent
+per-topic streams** — push (eager batched data), bitmap (periodic have-set advertisement), and
+control (graft/prune mesh maintenance) — rather than relying on gossipsub's IHAVE/IWANT. Forwarding
+is driven by **holder-count scarcity**: a node prefers pushing the attestations the fewest of its
+peers are known to hold, throttled by the send budget `B` and the per-position lifetime ceiling
+`attprop_max_peers_per_att`.
+
+Mode bool plumbing mirrors `partial_priority`: simctl writes the `att_propagation` key (plus the
+`attprop_*` tunables and `max_attestations_per_message`) into `config.yaml` from the Pydantic model,
+and `runner.generate_shadow_yaml` emits `-att-propagation` (plus `-max-attestations-per-message=N`)
+on the process args. The `attprop_*` tunables ride only in `config.yaml` (the Go side reads them
+directly) — they have **no** CLI flags. The Go batch verifier was extracted into its own
+`cmd/attestation/verify` package, shared by the partial strategies (package `node`) and the
+att_propagation manager (`cmd/attestation/node/attprop`).
+
+att_propagation **reuses the partial-mode log/wire keys** — it logs `partial_received`,
+`partial_recv_batch`, `attestation_validated`, etc. via the same `SlogTracer.OnPartialReceive`
+path — so `analysis/prelim-analysis.py` needs no regex changes. Mode detection labels it
+`att-propagation` (the first/most-specific branch), and its control bytes are accounted from
+metadata like the partial variants (no IHAVE/IWANT).
+
 ### Partial-mode log keys
 
 Structured slog lines emitted by partial mode (use `att_digest` — the hex-encoded

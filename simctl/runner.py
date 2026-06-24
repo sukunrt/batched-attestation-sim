@@ -213,6 +213,13 @@ def generate_shadow_yaml(
             )
             if config.send_available_with_data:
                 args_parts.append("-send-available-with-data")
+        # att_propagation reads its tunables from config.yaml directly; only the
+        # mode bool needs a flag. N reuses -max-attestations-per-message.
+        if config.att_propagation:
+            args_parts.append("-att-propagation")
+            args_parts.append(
+                f"-max-attestations-per-message={config.max_attestations_per_message}"
+            )
 
         node_memberships = memberships.get(node_num, [])
         if node_memberships:

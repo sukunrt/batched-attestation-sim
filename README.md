@@ -175,13 +175,41 @@ conveys our state), at most once per peer per tick, and only on a message that a
 for ~+30–46% control bytes — because that tail is throughput-bound, not knowledge-bound. Kept
 default-off as a tool to revisit.
 
+### att_propagation
+
+`att_propagation` is a third forwarding mode that replaces GossipSub with a native libp2p protocol.
+Each node keeps three persistent per-topic streams — push (eager batched data), bitmap (periodic
+have-set advertisement), and control (mesh graft/prune) — and forwards by holder-count scarcity
+(prefer the attestations the fewest peers are known to hold). Enable it with:
+
+```yaml
+att_propagation: true
+```
+
+It is mutually exclusive with `use_partial_messages` and `partial_priority`; setting more than one
+is rejected. The per-message size cap reuses `max_attestations_per_message` (default 30). Every
+other tunable is optional — leave it unset (or 0) to take the protocol default:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `attprop_push_dlow` / `attprop_push_d` / `attprop_push_dhigh` | 4 / 5 / 5 | push-mesh sizes (low = top-up trigger, D = high = hard cap) |
+| `attprop_bitmap_low` / `attprop_bitmap_target` / `attprop_bitmap_high` | 14 / 16 / 16 | bitmap-mesh sizes |
+| `attprop_send_budget_b` | 4 | per-tick send budget B |
+| `attprop_max_peers_per_att` | 30 | per-position lifetime peer ceiling (set generously ≥ D) |
+| `attprop_tick_interval_ms` | 20 | send tick |
+| `attprop_bitmap_floor_interval_ms` | 100 | minimum spacing between bitmap advertisements |
+| `attprop_heartbeat_interval_ms` | 700 | mesh-maintenance heartbeat |
+| `attprop_prune_backoff_seconds` | 60 | backoff after a prune before re-grafting |
+
+`analysis/prelim-analysis.py` labels this mode `att-propagation`.
+
 ## Analysis
 
 `analysis/prelim-analysis.py <run-or-experiment-dir>` prints time-to-receive latency percentiles
 and a received-bytes breakdown (attestation data, signatures, and control), scoped to the last
-slot. With a single mesh degree it compares classic against each partial variant present (partial
-and/or partial-priority); when an experiment mixes tiered-D and uniform-D variants it compares
-uniform-D vs tiered-D within each mode.
+slot. With a single mesh degree it compares classic against each non-classic mode present (partial,
+partial-priority, and/or att-propagation); when an experiment mixes tiered-D and uniform-D variants
+it compares uniform-D vs tiered-D within each mode.
 
 `analysis/plot_arrival_latency_cdf.py` (single node, classic vs partial vs partial-priority) and
 `analysis/plot_arrival_delays_cdf.py` (sim vs mainnet) write arrival-delay CDF plots to `graphs/`.
