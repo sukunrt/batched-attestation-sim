@@ -48,6 +48,34 @@ type SimConfig struct {
 	// bitmap onto the first data message to each mesh peer per tick, so peers
 	// stop forwarding duplicates back. The bitmap is never sent without data.
 	SendAvailableWithData bool `yaml:"send_available_with_data"`
+
+	// att_propagation path: a native libp2p protocol (no gossipsub) with three
+	// persistent per-topic streams (push / bitmap / control). Mutually exclusive
+	// with use_partial_messages and partial_priority. The tunables below are
+	// optional; zero falls back to the spec defaults via the Effective* helpers.
+	AttPropagation bool `yaml:"att_propagation"`
+
+	// §C1 push-mesh sizes (default 4/5/5: Dlow=top-up trigger, D=Dhigh=hard cap).
+	AttPropPushDlow  int `yaml:"attprop_push_dlow"`
+	AttPropPushD     int `yaml:"attprop_push_d"`
+	AttPropPushDhigh int `yaml:"attprop_push_dhigh"`
+
+	// §C1 bitmap-mesh sizes (default 14/16/16).
+	AttPropBitmapLow    int `yaml:"attprop_bitmap_low"`
+	AttPropBitmapTarget int `yaml:"attprop_bitmap_target"`
+	AttPropBitmapHigh   int `yaml:"attprop_bitmap_high"`
+
+	// §F1 send budget B (default 4), §E3 lifetime per-position peer ceiling
+	// (default 30, set generously ≥ D).
+	AttPropSendBudgetB    int `yaml:"attprop_send_budget_b"`
+	AttPropMaxPeersPerAtt int `yaml:"attprop_max_peers_per_att"`
+
+	// §F4 tick (default 20ms), §D2 bitmap floor (default 100ms),
+	// §C2 heartbeat (default 700ms), §C7 prune backoff (default 60s).
+	AttPropTickIntervalMs        int `yaml:"attprop_tick_interval_ms"`
+	AttPropBitmapFloorIntervalMs int `yaml:"attprop_bitmap_floor_interval_ms"`
+	AttPropHeartbeatIntervalMs   int `yaml:"attprop_heartbeat_interval_ms"`
+	AttPropPruneBackoffSeconds   int `yaml:"attprop_prune_backoff_seconds"`
 }
 
 func (s *SimConfig) PublishInterval() time.Duration {
@@ -73,6 +101,37 @@ func (s *SimConfig) EffectiveMaxAttestationsPerMessage() int {
 
 func (s *SimConfig) BandwidthLogFrequency() time.Duration {
 	return time.Duration(s.BandwidthLogFrequencyMs) * time.Millisecond
+}
+
+// AttPropConfig resolves the att_propagation tunables into a node.AttPropParams,
+// applying the spec defaults (§C1/§D2/§F) for any zero field. Only the values
+// are resolved here; the topic list / committee size / timing are filled by the
+// caller from the rest of the config.
+func (s *SimConfig) AttPropConfig() node.AttPropParams {
+	pick := func(v, def int) int {
+		if v <= 0 {
+			return def
+		}
+		return v
+	}
+	ms := func(v, defMs int) time.Duration {
+		return time.Duration(pick(v, defMs)) * time.Millisecond
+	}
+	return node.AttPropParams{
+		PushDlow:            pick(s.AttPropPushDlow, 4),
+		PushD:               pick(s.AttPropPushD, 5),
+		PushDhigh:           pick(s.AttPropPushDhigh, 5),
+		BitmapLow:           pick(s.AttPropBitmapLow, 14),
+		BitmapTarget:        pick(s.AttPropBitmapTarget, 16),
+		BitmapHigh:          pick(s.AttPropBitmapHigh, 16),
+		SendBudgetB:         pick(s.AttPropSendBudgetB, 4),
+		MaxAttsPerMessage:   s.EffectiveMaxAttestationsPerMessage(),
+		MaxPeersPerAtt:      pick(s.AttPropMaxPeersPerAtt, 30),
+		TickInterval:        ms(s.AttPropTickIntervalMs, 20),
+		BitmapFloorInterval: ms(s.AttPropBitmapFloorIntervalMs, 100),
+		HeartbeatInterval:   ms(s.AttPropHeartbeatIntervalMs, 700),
+		PruneBackoff:        time.Duration(pick(s.AttPropPruneBackoffSeconds, 60)) * time.Second,
+	}
 }
 
 func LoadConfig(path string) (*SimConfig, error) {

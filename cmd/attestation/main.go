@@ -41,8 +41,9 @@ func main() {
 		committeeMemberships = flag.String("committee-memberships", "", "Semicolon-separated topic:position pairs, e.g. 0:7;1:42")
 		usePartialMessages   = flag.Bool("use-partial-messages", false, "Use partial messages (list of attestor IDs + ephemeral iwant)")
 		partialPriority      = flag.Bool("partial-priority", false, "Use partial-priority forwarding (size-capped, least-forwarded-first)")
-		maxAttsPerMessage    = flag.Int("max-attestations-per-message", 0, "Max attestations per outgoing partial-priority data message (0 = default)")
+		maxAttsPerMessage    = flag.Int("max-attestations-per-message", 0, "Max attestations per outgoing partial-priority/att-propagation data message (0 = default)")
 		sendAvailWithData    = flag.Bool("send-available-with-data", false, "Piggyback our validated bitmap onto the first data message to each mesh peer per tick (partial-priority only)")
+		attPropagation       = flag.Bool("att-propagation", false, "Use the att_propagation native protocol (no gossipsub; mutually exclusive with partial modes)")
 		gossipsubParams      = flag.String("gossipsub-params", "", "Per-node gossipsub mesh override, e.g. Dlow:8,D:12,Dhigh:16; empty uses the config value")
 	)
 	flag.Parse()
@@ -79,7 +80,11 @@ func main() {
 
 	usePartial := *usePartialMessages || sim.UsePartialMessages
 	usePriority := *partialPriority || sim.PartialPriorityMode
+	useAttProp := *attPropagation || sim.AttPropagation
 	sendAvailWithDataOn := *sendAvailWithData || sim.SendAvailableWithData
+	if err := checkModeExclusion(usePartial, usePriority, useAttProp); err != nil {
+		log.Fatalf("mode config: %v", err)
+	}
 	memberships := parseCommitteeMemberships(*committeeMemberships)
 	for _, m := range memberships {
 		if m.TopicIndex < 0 || m.TopicIndex >= numTopics {
@@ -119,6 +124,8 @@ func main() {
 		CommitteeSize:              sim.NumAttestors,
 		PublishStart:               publishStart,
 		SlotDuration:               sim.SlotDuration(),
+		AttPropagation:             useAttProp,
+		AttProp:                    sim.AttPropConfig(),
 	}
 
 	// add some jitter so that all nodes aren't doing heartbeat in sync
@@ -170,6 +177,19 @@ func parseCommitteeMemberships(s string) []node.TopicMembership {
 		out = append(out, node.TopicMembership{TopicIndex: topic, Position: pos})
 	}
 	return out
+}
+
+// checkModeExclusion rejects incompatible mode combinations. att_propagation is
+// a native protocol that replaces gossipsub, so it cannot run alongside either
+// partial-message mode. The two partial modes are themselves selected by
+// precedence elsewhere (priority wins), so only att_propagation needs guarding.
+// Returns an error (not a fatal) so it is unit-testable.
+func checkModeExclusion(usePartial, usePriority, useAttProp bool) error {
+	if useAttProp && (usePartial || usePriority) {
+		return fmt.Errorf(
+			"att_propagation is mutually exclusive with use_partial_messages and partial_priority")
+	}
+	return nil
 }
 
 // parseGossipsubParams parses a "Dlow:8,D:12,Dhigh:16" string into

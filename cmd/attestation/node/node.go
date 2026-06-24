@@ -22,6 +22,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/ethp2p/simlab/cmd/attestation/node/attprop"
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
 	"github.com/ethp2p/simlab/cmd/attestation/verify"
 )
@@ -101,6 +102,12 @@ type Node struct {
 	// SlotDuration is the duration of each simulation slot.
 	SlotDuration time.Duration
 
+	// AttPropagation selects the native att_propagation protocol (no gossipsub).
+	// AttProp holds its tunables. Mutually exclusive with the partial-message
+	// modes — main.go rejects the combination.
+	AttPropagation bool
+	AttProp        AttPropParams
+
 	logger          *slog.Logger
 	ps              *pubsub.PubSub
 	verifier        *verify.Verifier
@@ -108,6 +115,17 @@ type Node struct {
 	subs            []*pubsub.Subscription
 	partial         *partialAttestationManager
 	partialPriority *priorityAttestationManager
+	attProp         *attprop.Manager
+}
+
+// AttPropParams are the att_propagation mesh/send tunables (spec §C1/§D2/§F),
+// resolved with defaults by the config layer and copied into attprop.Config in
+// Start. Kept as a Node-level struct so the construction literal stays compact.
+type AttPropParams struct {
+	PushDlow, PushD, PushDhigh                                         int
+	BitmapLow, BitmapTarget, BitmapHigh                                int
+	SendBudgetB, MaxAttsPerMessage, MaxPeersPerAtt                     int
+	TickInterval, BitmapFloorInterval, HeartbeatInterval, PruneBackoff time.Duration
 }
 
 // partialManager is the runtime surface both partial-message strategies share.
@@ -142,6 +160,11 @@ func (n *Node) activePartialManager() partialManager {
 // Start brings the node up. ctx is used as the pubsub lifecycle context;
 // cancel it (via Stop or in tests) to release pubsub's worker goroutines.
 func (n *Node) Start(ctx context.Context) {
+	if n.AttPropagation {
+		n.startAttProp(ctx)
+		return
+	}
+
 	params := pubsub.DefaultGossipSubParams()
 	params.D = n.GossipsubParams.D
 	params.Dlo = n.GossipsubParams.Dlow
@@ -221,7 +244,78 @@ func topicName(index int) string {
 	return fmt.Sprintf("/eth2/00000000/beacon_attestation_%d/ssz_snappy", index)
 }
 
+// startAttProp brings the node up in att_propagation mode: build the shared
+// verifier and the attprop Manager, register its stream handlers. No gossipsub
+// is created and no topics are joined — the native protocol replaces both.
+func (n *Node) startAttProp(ctx context.Context) {
+	n.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelInfo,
+	})).With("node", n.Num)
+
+	n.verifier = verify.New(
+		n.VerificationDelay,
+		n.PerAttestationVerification,
+		n.VerificationBatchWindow,
+		slog.With("node", n.Num, "component", "verifier"),
+	)
+	go n.verifier.Run()
+
+	topics := make([]string, n.NumTopics)
+	for i := range n.NumTopics {
+		topics[i] = topicName(i)
+	}
+
+	p := n.AttProp
+	cfg := attprop.Config{
+		Logger:              slog.With("node", n.Num, "component", "attprop"),
+		NodeNum:             n.Num,
+		Topics:              topics,
+		CommitteeSize:       n.CommitteeSize,
+		PublishStart:        n.PublishStart,
+		SlotDuration:        n.SlotDuration,
+		Fanout:              n.Fanout,
+		PushDlow:            p.PushDlow,
+		PushD:               p.PushD,
+		PushDhigh:           p.PushDhigh,
+		BitmapLow:           p.BitmapLow,
+		BitmapTarget:        p.BitmapTarget,
+		BitmapHigh:          p.BitmapHigh,
+		SendBudgetB:         p.SendBudgetB,
+		MaxAttsPerMessage:   p.MaxAttsPerMessage,
+		MaxPeersPerAtt:      p.MaxPeersPerAtt,
+		TickInterval:        p.TickInterval,
+		BitmapFloorInterval: p.BitmapFloorInterval,
+		HeartbeatInterval:   p.HeartbeatInterval,
+		PruneBackoff:        p.PruneBackoff,
+	}
+	n.attProp = attprop.New(n.Host, n.verifier, n.attPropTracer(), cfg)
+	n.attProp.Start(ctx)
+
+	n.logger.Info("started", "fanout", n.Fanout, "mode", "att_propagation")
+}
+
+// attPropTracer returns the receive-latency sink for attprop. n.Tracer
+// satisfies attprop.Tracer structurally; a nil Tracer yields a no-op so attprop
+// never nil-derefs.
+func (n *Node) attPropTracer() attprop.Tracer {
+	if n.Tracer == nil {
+		return noopAttPropTracer{}
+	}
+	return n.Tracer
+}
+
+// noopAttPropTracer discards receive events (used when Node.Tracer is nil).
+type noopAttPropTracer struct{}
+
+func (noopAttPropTracer) OnPartialReceive(_, _, _ int, _ []byte, _ int64) {}
+
 func (n *Node) JoinTopics() {
+	// att_propagation has no gossipsub topics; the native protocol's streams are
+	// already up from Start/ConnectToPeers.
+	if n.AttPropagation {
+		return
+	}
 	joinOne := func(name string, subscribe bool) {
 		// Only register topic validator for non-partial mode.
 		// In partial mode, validation is handled by the partial message manager.
@@ -285,8 +379,13 @@ func (n *Node) ConnectToPeers(peers []int) {
 			err = n.Host.Connect(ctx, peer.AddrInfo{ID: peerID, Addrs: []ma.Multiaddr{addr}})
 			if err != nil {
 				n.logger.Error("connect failed", "peer", peerNum, "err", err)
-			} else {
-				n.logger.Info("connected", "peer", peerNum)
+				return
+			}
+			n.logger.Info("connected", "peer", peerNum)
+			if n.AttPropagation {
+				// Opener side (lower peer ID) opens the three streams; the higher
+				// side relies on its inbound handlers.
+				n.attProp.ConnectPeer(peerID)
 			}
 		})
 	}
@@ -297,6 +396,10 @@ func (n *Node) ConnectToPeers(peers []int) {
 // In parallel, it publishes to the topic if slotNum is in
 // its publishSlots; payload is AttestationDataSize + SignatureSize bytes.
 func (n *Node) Run(numSlots int, slotDuration time.Duration) {
+	if n.AttPropagation {
+		n.runAttProp(numSlots, slotDuration)
+		return
+	}
 	if n.partialModeActive() {
 		n.runPartial(numSlots, slotDuration)
 		return
@@ -476,6 +579,69 @@ func (n *Node) selfPublish(slot int) {
 			n.activePartialManager().fanoutPublish(n.ps, topicName, slot, m.Position, sig, data)
 		} else {
 			n.activePartialManager().publishLocal(topicName, slot, m.Position, sig, data)
+		}
+		n.logger.Info("self_published",
+			"slot", slot,
+			"topic", m.TopicIndex,
+			"position", m.Position,
+			"att_digest", hex.EncodeToString(digest[:]),
+			"at", publishTime.UnixMilli(),
+		)
+		if n.Tracer != nil {
+			n.Tracer.OnPartialPublish(slot, m.TopicIndex, m.Position, data)
+		}
+	}
+}
+
+// runAttProp drives the node in att_propagation mode. It mirrors runPartial:
+// launch the Manager eventloop (or, for a fanout node, just its reset
+// handlers), publish this node's own attestation per committee membership each
+// publish slot, then drain and stop. The mode shares partial mode's slot
+// timing and self-publish log keys (§H2) so analysis parsing is unchanged.
+func (n *Node) runAttProp(numSlots int, slotDuration time.Duration) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go n.attProp.Run(ctx)
+
+	for slot := 1; slot <= numSlots; slot++ {
+		n.logger.Info("starting slot", "slot", slot)
+		slotEndTime := time.Now().Add(slotDuration)
+
+		if _, ok := n.PublishSlots[slot]; ok {
+			n.selfPublishAttProp(slot)
+		}
+
+		time.Sleep(time.Until(slotEndTime))
+		n.logger.Info("slot complete", "slot", slot)
+	}
+
+	time.Sleep(slotDuration)
+	n.verifier.Stop()
+	cancel()
+}
+
+// selfPublishAttProp injects this node's own attestation into attprop for each
+// committee membership. Fanout nodes leaf-inject via FanoutPublish; mesh nodes
+// add to local validated state via PublishLocal. Mirrors selfPublish.
+func (n *Node) selfPublishAttProp(slot int) {
+	sig := make([]byte, n.SignatureSize)
+	crand.Read(sig)
+
+	publishTime := time.Now()
+	if n.PublishDelay != nil {
+		if delay := n.PublishDelay(); delay > 0 {
+			time.Sleep(delay)
+		}
+	}
+
+	for _, m := range n.CommitteeMemberships {
+		name := topicName(m.TopicIndex)
+		data := n.attestationDataForSlot(slot, name)
+		digest := attDigest(data)
+		if n.Fanout {
+			n.attProp.FanoutPublish(name, slot, m.Position, sig, data)
+		} else {
+			n.attProp.PublishLocal(name, slot, m.Position, sig, data)
 		}
 		n.logger.Info("self_published",
 			"slot", slot,
