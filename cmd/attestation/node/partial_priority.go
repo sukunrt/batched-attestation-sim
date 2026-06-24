@@ -31,9 +31,10 @@ const MaxAttestationsPerMessage = 30
 // peerAttestationState, PartialAttestationEntry) and its pure helpers
 // (getAttestationMetadata, selectIWantTargets, addReceived, newCommitteeBitmap,
 // slotGroupID, shortPeer, attDigestHex, …). The only behavioral divergence is
-// the per-peer send selection: instead of one big push per peer per tick, it
-// sends the least-forwarded attestations first, split into several ≤ N-sized
-// data messages, with the gossip metadata advertisement as its own message.
+// the send selection: rather than one big push per peer per tick, it round-
+// robins one ≤ N-sized data message to each peer per pass — least-forwarded
+// attestations first, committed as drawn so each peer's pick spreads across the
+// others — with the gossip metadata advertisement as its own message.
 
 // idxEntry identifies one forwardable attestation across all buckets at a
 // (topic, slot): bucketKey is string(attestation_data); pos is the committee
@@ -284,10 +285,11 @@ func (m *priorityAttestationManager) markValidated(topic string, slot int, data 
 }
 
 // publishActions returns the PublishActionsFn for a (topic, slot). The
-// partial-priority send: per peer, the least-forwarded validated attestations
-// it lacks are drawn across all buckets in sendCount order and chunked into
-// ≤ N-sized data messages (one yield each, several small RPCs). The gossip
-// metadata advertisement is yielded as its own separate message.
+// partial-priority send round-robins one ≤ N-sized data message to each
+// requesting peer per pass (least-forwarded validated positions first, drawn
+// across all buckets and committed as drawn so the next peer's pick reflects
+// it), repeating passes until every peer is drained. The gossip metadata
+// advertisement is yielded afterward as its own separate message per peer.
 func (m *priorityAttestationManager) publishActions(topic string, slot int) partialmessages.PublishActionsFn[peerState] {
 	return func(
 		peerStates map[peer.ID]peerState,
@@ -316,42 +318,64 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 				}
 			}
 
-			for p, ps := range peerStates {
-				// DATA: least-forwarded-first, cross-bucket, chunked into ≤ N
-				// per message. Each chunk is its own data-only PublishAction.
+			// DATA: round-robin one ≤ N-sized chunk to each requesting peer per
+			// pass, least-forwarded first across all buckets. Each draw commits
+			// its positions before the next peer is served, so the next peer's
+			// pick reflects what this one just took — spreading scarce
+			// attestations across peers instead of draining one peer fully.
+			// Repeat passes until every peer is exhausted. requesters is a
+			// snapshot so the per-pass order stays stable.
+			var requesters []peer.ID
+			for p := range peerStates {
 				if peerRequestsPartial(p) {
-					for _, chunk := range m.selectChunksForPeer(ss, p, ps.gossipPeer) {
-						dataEnv := &pb.BatchedAttestationEnvelope{}
-						var total int
-						bks := slices.Collect(maps.Keys(chunk))
-						slices.SortFunc(bks, func(a, b string) int {
-							return ss.bucketSeq[a] - ss.bucketSeq[b]
-						})
-						for _, bk := range bks {
-							b := ss.attestationsMap[bk]
-							dataEnv.Batches = append(dataEnv.Batches, m.encodeBatch(b, chunk[bk]))
-							total += len(chunk[bk])
-						}
-						encodedData, err := proto.Marshal(dataEnv)
-						if err != nil {
-							m.logger.Error("marshal data envelope", "err", err)
-							continue
-						}
-						m.logger.Info("partial_send_tick",
-							"peer", shortPeer(p),
-							"peer_type", peerTypeLabel(ps),
-							"slot", slot,
-							"topic", topicIdx,
-							"num_buckets", len(bks),
-							"data_bytes", len(encodedData),
-							"total_positions_sent", total,
-						)
-						if !yield(p, partialmessages.PublishAction{EncodedPartialMessage: encodedData}) {
-							return
-						}
+					requesters = append(requesters, p)
+				}
+			}
+			for {
+				progressed := false
+				for _, p := range requesters {
+					chunk := m.selectOneChunkForPeer(ss, p, peerStates[p].gossipPeer)
+					if chunk == nil {
+						continue
+					}
+					progressed = true
+					dataEnv := &pb.BatchedAttestationEnvelope{}
+					var total int
+					bks := slices.Collect(maps.Keys(chunk))
+					slices.SortFunc(bks, func(a, b string) int {
+						return ss.bucketSeq[a] - ss.bucketSeq[b]
+					})
+					for _, bk := range bks {
+						b := ss.attestationsMap[bk]
+						dataEnv.Batches = append(dataEnv.Batches, m.encodeBatch(b, chunk[bk]))
+						total += len(chunk[bk])
+					}
+					encodedData, err := proto.Marshal(dataEnv)
+					if err != nil {
+						m.logger.Error("marshal data envelope", "err", err)
+						continue
+					}
+					m.logger.Info("partial_send_tick",
+						"peer", shortPeer(p),
+						"peer_type", peerTypeLabel(peerStates[p]),
+						"slot", slot,
+						"topic", topicIdx,
+						"num_buckets", len(bks),
+						"data_bytes", len(encodedData),
+						"total_positions_sent", total,
+					)
+					if !yield(p, partialmessages.PublishAction{EncodedPartialMessage: encodedData}) {
+						return
 					}
 				}
+				if !progressed {
+					break
+				}
+			}
 
+			// pendingWant clear + gossip METADATA, per peer. Run after all data
+			// so a peer's requests stay readable until its data fully drains.
+			for p, ps := range peerStates {
 				// Clear pendingWants regardless of what we sent — requests are
 				// non-persistent (read above by the gossip-peer draw).
 				for _, b := range ss.attestationsMap {
@@ -405,68 +429,65 @@ func peerTypeLabel(ps peerState) string {
 	return "mesh"
 }
 
-// selectChunksForPeer draws the positions this peer needs across all buckets in
-// least-forwarded-first order, commits each as it is drawn (so the next peer
-// sees the updated sendCount), and groups them into chunks of ≤ maxPerMessage,
-// each a bucketKey->positions map in priority order. Caller holds m.mu.
+// selectOneChunkForPeer draws up to maxPerMessage of the positions this peer
+// needs, in least-forwarded-first order across all buckets, and commits each
+// draw (per-peer available, sendCount, index bump) so the next peer served in
+// the same pass sees the updated sendCount. It returns one chunk as a
+// bucketKey->positions map in priority order, or nil when the peer has nothing
+// left to send. Caller holds m.mu.
 //
-// It iterates a frozen snapshot of the index ordered ascending by sendCount, so
-// the commits it performs (which move entries to higher levels) cannot perturb
-// this peer's own walk; the per-peer available bitmap also guards against
-// drawing the same position twice.
-func (m *priorityAttestationManager) selectChunksForPeer(ss *prioritySlotState, p peer.ID, gossipPeer bool) []map[string][]int {
-	var snapshot []idxEntry
-	for k := range ss.levels {
-		snapshot = append(snapshot, ss.levels[k].entries...)
+// Candidates are collected read-only first — ascending sendCount level, and
+// within a level sorted by bucketSeq then position so the order is deterministic
+// despite the index's swap-delete reordering — then committed, so the index
+// mutation can't perturb the scan. The per-peer available bitmap guards against
+// re-drawing a position across passes. Entries in ss.levels are validated and
+// under the lifetime ceiling by construction, so no extra guard is needed.
+func (m *priorityAttestationManager) selectOneChunkForPeer(ss *prioritySlotState, p peer.ID, gossipPeer bool) map[string][]int {
+	var drawn []idxEntry
+	for k := 0; k < len(ss.levels) && len(drawn) < m.maxPerMessage; k++ {
+		var cand []idxEntry
+		for _, e := range ss.levels[k].entries {
+			b := ss.attestationsMap[e.bucketKey]
+			if b == nil {
+				continue
+			}
+			bps := initAndGetPeerAttestationState(b, p, m.committeeSize)
+			if bps.available.Get(e.pos) {
+				continue
+			}
+			if gossipPeer && !bps.pendingWant.Get(e.pos) {
+				continue
+			}
+			cand = append(cand, e)
+		}
+		slices.SortFunc(cand, func(a, b idxEntry) int {
+			if d := ss.bucketSeq[a.bucketKey] - ss.bucketSeq[b.bucketKey]; d != 0 {
+				return d
+			}
+			return a.pos - b.pos
+		})
+		for _, e := range cand {
+			if len(drawn) == m.maxPerMessage {
+				break
+			}
+			drawn = append(drawn, e)
+		}
 	}
-	if len(snapshot) == 0 {
+	if len(drawn) == 0 {
 		return nil
 	}
 
-	var chunks []map[string][]int
-	cur := make(map[string][]int)
-	curCount := 0
-	flush := func() {
-		if curCount > 0 {
-			chunks = append(chunks, cur)
-			cur = make(map[string][]int)
-			curCount = 0
-		}
-	}
-
-	for _, e := range snapshot {
+	chunk := make(map[string][]int)
+	for _, e := range drawn {
 		b := ss.attestationsMap[e.bucketKey]
-		if b == nil {
-			continue
-		}
 		sc := b.sendCount[e.pos]
-		if sc >= ss.maxPeers {
-			continue
-		}
-		if _, ok := b.validated[e.pos]; !ok {
-			continue
-		}
+		chunk[e.bucketKey] = append(chunk[e.bucketKey], e.pos)
 		bps := initAndGetPeerAttestationState(b, p, m.committeeSize)
-		if bps.available.Get(e.pos) {
-			continue
-		}
-		if gossipPeer && !bps.pendingWant.Get(e.pos) {
-			continue
-		}
-
-		// Draw and commit.
-		cur[e.bucketKey] = append(cur[e.bucketKey], e.pos)
-		curCount++
 		bps.available.Set(e.pos)
 		b.sendCount[e.pos]++
 		ss.indexBump(e.bucketKey, e.pos, sc)
-
-		if curCount == m.maxPerMessage {
-			flush()
-		}
 	}
-	flush()
-	return chunks
+	return chunk
 }
 
 // encodeBatch builds a BatchedAttestation for the given positions, emitting

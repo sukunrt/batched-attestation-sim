@@ -147,10 +147,13 @@ Set `disable_ihave_gossip: true` only for a no-IHAVE variant.
 
 `partial-priority` is a second partial-message forwarding strategy. It keeps every outgoing data
 message small and pushes the least-forwarded attestations first: instead of one large push per peer
-per tick, each peer is sent several small data messages (≤ `max_attestations_per_message`
-attestations each, default 30), ordered so scarce (under-propagated) attestations go out first.
-Nothing sendable is dropped — the cap is a per-message size, not a per-tick throttle. It runs over
-the same libp2p partial-messages extension and keeps IHAVE/IWANT gossip as usual. Enable it with:
+per tick, it round-robins one small data message (≤ `max_attestations_per_message` attestations,
+default 30) to each peer per pass and repeats until every peer is served. Each message carries the
+scarcest (under-propagated) attestations that peer still lacks, and every send is counted before the
+next peer is picked — so scarce attestations spread across peers instead of piling onto whichever
+peer is served first. Nothing sendable is dropped — the cap is a per-message size, not a per-tick
+throttle. It runs over the same libp2p partial-messages extension and keeps IHAVE/IWANT gossip as
+usual. Enable it with:
 
 ```yaml
 partial_priority: true

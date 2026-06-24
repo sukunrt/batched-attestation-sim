@@ -348,6 +348,77 @@ func TestPriorityLifetimeCeilingExcluded(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// (8) Round-robin spread — with several requesting peers and more positions than
+// fit one message, each peer gets one ≤ N chunk per pass (no peer is drained
+// before the others start), and the first pass partitions the lowest-forwarded
+// positions disjointly across peers. This is the spread the old per-peer-drain
+// order lacked; assertions are order-independent of the map's peer iteration.
+// -----------------------------------------------------------------------------
+
+func TestPriorityRoundRobinSpreadsAcrossPeers(t *testing.T) {
+	m := newPriorityUnitManager(t) // MaxPeers=64, N=30
+	const numPeers, numPos = 3, 90
+	sendCounts := map[int]int{}
+	for pos := range numPos {
+		sendCounts[pos] = 0 // all least-forwarded, so every peer needs all of them
+	}
+	seedValidated(m, "t0", 1, []byte("d"), sendCounts)
+
+	// Capture the (peer, data-positions) sequence across the whole tick in yield
+	// order — runPriorityPublishActions groups by peer and would lose it.
+	type send struct {
+		peer peer.ID
+		pos  []int
+	}
+	var seq []send
+	for p, action := range m.publishActions("t0", 1)(makePeers(numPeers, false), peerAcceptsPartial) {
+		if len(action.EncodedPartialMessage) == 0 {
+			continue
+		}
+		env := &pb.BatchedAttestationEnvelope{}
+		require.NoError(t, proto.Unmarshal(action.EncodedPartialMessage, env))
+		seq = append(seq, send{p, dataPositionsInOrder(collected{payload: env})})
+	}
+
+	// 3 peers × ceil(90/30)=3 messages each = 9 data messages, emitted in 3
+	// passes of 3 (one per distinct peer) — proving round-robin, not per-peer
+	// drain (which would emit peer A's three messages back to back).
+	require.Len(t, seq, numPeers*3)
+	for pass := range 3 {
+		peersThisPass := map[peer.ID]bool{}
+		for i := range numPeers {
+			peersThisPass[seq[pass*numPeers+i].peer] = true
+		}
+		assert.Len(t, peersThisPass, numPeers, "pass %d sends one message to each distinct peer", pass)
+	}
+
+	// First pass partitions the 90 lowest-forwarded positions disjointly: the
+	// commit-as-you-go draw hands each peer a different slice.
+	seen := map[int]bool{}
+	for i := range numPeers {
+		for _, pos := range seq[i].pos {
+			assert.False(t, seen[pos], "position %d sent to two peers in the first pass", pos)
+			seen[pos] = true
+		}
+	}
+	assert.Len(t, seen, numPos, "first pass covers every position exactly once")
+
+	// Across all passes every peer still ends up with every position.
+	perPeer := map[peer.ID][]int{}
+	for _, s := range seq {
+		perPeer[s.peer] = append(perPeer[s.peer], s.pos...)
+	}
+	require.Len(t, perPeer, numPeers)
+	for p, got := range perPeer {
+		assert.ElementsMatch(t, intRange(0, numPos), got, "peer %s eventually receives every position", p)
+	}
+
+	m.mu.Lock()
+	checkIndexInvariant(t, m.getSlotState("t0", 1))
+	m.mu.Unlock()
+}
+
+// -----------------------------------------------------------------------------
 // Index invariant helpers (test-only).
 // -----------------------------------------------------------------------------
 

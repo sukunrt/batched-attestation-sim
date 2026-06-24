@@ -169,12 +169,15 @@ max_attestations_per_message: 30  # optional, default 30 (the per-message size c
 
 It is a drop-in alternative to partial mode over the same libp2p partial-messages extension (same
 wire types, same `RequestPartialMessages`, IHAVE/IWANT gossip as usual, same receive/validation
-path). The **only** behavioral divergence is the per-peer send: instead of one large push per peer
-per tick, each peer is sent the least-forwarded validated attestations it lacks, drawn across all
-buckets in `sendCount` order and split into several ≤ N-sized data messages (one libp2p RPC each).
-The gossip `available`/`requests` advertisement is its own separate metadata-only message. Nothing
-sendable is dropped — N caps message size, not per-tick volume; `max_peers_per_attestation` stays
-the only volume throttle (the per-position lifetime ceiling), so set it generously (≥ D).
+path). The **only** behavioral divergence is the send: instead of one large push per peer per tick,
+it round-robins one ≤ N-sized data message to each requesting peer per pass, repeating passes until
+every peer is drained. Each message holds the least-forwarded validated attestations that peer
+lacks, drawn across all buckets in `sendCount` order; every draw is committed (bumps `sendCount`)
+before the next peer is served, so a peer's pick reflects what the prior peers just took —
+spreading scarce attestations across peers instead of draining one peer fully first. The gossip
+`available`/`requests` advertisement is its own separate metadata-only message. Nothing sendable is
+dropped — N caps message size, not per-tick volume; `max_peers_per_attestation` stays the only
+volume throttle (the per-position lifetime ceiling), so set it generously (≥ D).
 
 Implementation: `cmd/attestation/node/partial_priority.go` (`priorityAttestationManager`). It
 **reuses** partial.go's data model (`AttestationState`, `peerState`, `peerAttestationState`,
