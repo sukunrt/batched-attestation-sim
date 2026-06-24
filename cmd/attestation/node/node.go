@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
+	"github.com/ethp2p/simlab/cmd/attestation/verify"
 )
 
 // GossipsubParams holds the mesh-size parameters that drive gossipsub's
@@ -102,7 +103,7 @@ type Node struct {
 
 	logger          *slog.Logger
 	ps              *pubsub.PubSub
-	verifier        *batchVerifier
+	verifier        *verify.Verifier
 	topics          []*pubsub.Topic
 	subs            []*pubsub.Subscription
 	partial         *partialAttestationManager
@@ -169,13 +170,13 @@ func (n *Node) Start(ctx context.Context) {
 		opts = append(opts, pubsub.WithRawTracer(dropTracer))
 	}
 
-	n.verifier = newBatchVerifier(
+	n.verifier = verify.New(
 		n.VerificationDelay,
 		n.PerAttestationVerification,
 		n.VerificationBatchWindow,
 		slog.With("node", n.Num, "component", "verifier"),
 	)
-	go n.verifier.run()
+	go n.verifier.Run()
 
 	topicIndexMap := make(map[string]int, n.NumTopics)
 	for i := range n.NumTopics {
@@ -226,7 +227,7 @@ func (n *Node) JoinTopics() {
 		// In partial mode, validation is handled by the partial message manager.
 		if !n.partialModeActive() {
 			err := n.ps.RegisterTopicValidator(name, func(_ context.Context, _ peer.ID, _ *pubsub.Message) pubsub.ValidationResult {
-				n.verifier.submitAndWait(verificationItem{Attestations: []any{nil}})
+				n.verifier.SubmitAndWait(verify.Item{Attestations: []any{nil}})
 				return pubsub.ValidationAccept
 			})
 			if err != nil {
@@ -391,7 +392,7 @@ func (n *Node) runClassic(numSlots int, slotDuration time.Duration) {
 
 	// give the receiver a moment to process in-flight messages, then stop it
 	time.Sleep(slotDuration)
-	n.verifier.stop()
+	n.verifier.Stop()
 	cancel()
 	wg.Wait()
 }
@@ -448,7 +449,7 @@ func (n *Node) runPartial(numSlots int, slotDuration time.Duration) {
 	}
 
 	time.Sleep(slotDuration)
-	n.verifier.stop()
+	n.verifier.Stop()
 	cancel()
 }
 

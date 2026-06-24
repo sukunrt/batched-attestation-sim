@@ -1,4 +1,4 @@
-package node
+package verify
 
 import (
 	"log/slog"
@@ -16,11 +16,11 @@ import (
 // other goroutines.
 type recordingSink struct {
 	mu    sync.Mutex
-	items []verificationItem
+	items []Item
 }
 
-func (r *recordingSink) callback() func(verificationItem) {
-	return func(item verificationItem) {
+func (r *recordingSink) callback() func(Item) {
+	return func(item Item) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.items = append(r.items, item)
@@ -65,11 +65,11 @@ func (f *fixedDelay) callCount() int {
 	return f.calls
 }
 
-func newTestVerifier(t *testing.T, delay func() time.Duration, perAtt, window time.Duration) *batchVerifier {
+func newTestVerifier(t *testing.T, delay func() time.Duration, perAtt, window time.Duration) *Verifier {
 	t.Helper()
-	v := newBatchVerifier(delay, perAtt, window, slog.Default())
-	go v.run()
-	t.Cleanup(func() { v.stop() })
+	v := New(delay, perAtt, window, slog.Default())
+	go v.Run()
+	t.Cleanup(func() { v.Stop() })
 	return v
 }
 
@@ -78,7 +78,7 @@ func TestVerifierSingleItem(t *testing.T) {
 		sink := &recordingSink{}
 		v := newTestVerifier(t, func() time.Duration { return 20 * time.Millisecond }, 0, 5*time.Millisecond)
 
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{1, 2, 3}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{1, 2, 3}}, sink.callback())
 		time.Sleep(50 * time.Millisecond)
 
 		assert.Equal(t, 1, sink.count())
@@ -91,9 +91,9 @@ func TestVerifierSubmitAndWait(t *testing.T) {
 		v := newTestVerifier(t, func() time.Duration { return 10 * time.Millisecond }, 0, 5*time.Millisecond)
 
 		start := time.Now()
-		v.submitAndWait(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{1}})
+		v.SubmitAndWait(Item{Topic: "t0", Slot: 1, Attestations: []any{1}})
 
-		// submitAndWait must not return before the batch sleep has elapsed.
+		// SubmitAndWait must not return before the batch sleep has elapsed.
 		assert.GreaterOrEqual(t, time.Since(start), 10*time.Millisecond)
 	})
 }
@@ -108,10 +108,10 @@ func TestVerifierBatchesWithinWindow(t *testing.T) {
 		delay := &fixedDelay{delay: 5 * time.Millisecond}
 		v := newTestVerifier(t, delay.fn(), 0, 50*time.Millisecond)
 
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{1}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{1}}, sink.callback())
 		time.Sleep(10 * time.Millisecond) // verifyBatch finished, window still open
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{2}}, sink.callback())
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{3}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{2}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{3}}, sink.callback())
 		time.Sleep(100 * time.Millisecond)
 
 		assert.Equal(t, 3, sink.totalAttestations())
@@ -128,10 +128,10 @@ func TestVerifierItemsDuringVerifyAreQueued(t *testing.T) {
 		sink := &recordingSink{}
 		v := newTestVerifier(t, func() time.Duration { return 30 * time.Millisecond }, 0, 5*time.Millisecond)
 
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{1}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{1}}, sink.callback())
 		time.Sleep(10 * time.Millisecond) // mid-verification
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{2}}, sink.callback())
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{3}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{2}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{3}}, sink.callback())
 		time.Sleep(200 * time.Millisecond)
 
 		assert.Equal(t, 3, sink.totalAttestations())
@@ -150,7 +150,7 @@ func TestVerifierManyItemsNoneDropped(t *testing.T) {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{idx}}, sink.callback())
+				v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{idx}}, sink.callback())
 			}(i)
 		}
 		wg.Wait()
@@ -164,16 +164,16 @@ func TestVerifierManyItemsNoneDropped(t *testing.T) {
 func TestVerifierStopDrains(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sink := &recordingSink{}
-		v := newBatchVerifier(
+		v := New(
 			func() time.Duration { return 5 * time.Millisecond },
 			0,
 			2*time.Millisecond,
 			slog.Default(),
 		)
-		go v.run()
+		go v.Run()
 
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{1, 2}}, sink.callback())
-		v.stop() // should block until queued items are validated.
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{1, 2}}, sink.callback())
+		v.Stop() // should block until queued items are validated.
 
 		assert.Equal(t, 2, sink.totalAttestations())
 	})
@@ -182,14 +182,14 @@ func TestVerifierStopDrains(t *testing.T) {
 func TestVerifierStopWithoutWork(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sink := &recordingSink{}
-		v := newBatchVerifier(
+		v := New(
 			func() time.Duration { return 5 * time.Millisecond },
 			0,
 			2*time.Millisecond,
 			slog.Default(),
 		)
-		go v.run()
-		v.stop()
+		go v.Run()
+		v.Stop()
 		assert.Equal(t, 0, sink.count())
 	})
 }
@@ -203,9 +203,9 @@ func TestVerifierPerAttestationDelayCounted(t *testing.T) {
 		delay := &fixedDelay{delay: 10 * time.Millisecond}
 		v := newTestVerifier(t, delay.fn(), 1*time.Millisecond, 5*time.Millisecond)
 
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{1, 2, 3}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{1, 2, 3}}, sink.callback())
 		time.Sleep(50 * time.Millisecond)
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{4, 5}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{4, 5}}, sink.callback())
 		time.Sleep(50 * time.Millisecond)
 
 		assert.Equal(t, 2, delay.callCount())
@@ -220,9 +220,9 @@ func TestVerifierMultipleTopicsAndSlots(t *testing.T) {
 		sink := &recordingSink{}
 		v := newTestVerifier(t, func() time.Duration { return 10 * time.Millisecond }, 0, 5*time.Millisecond)
 
-		v.submit(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{1}}, sink.callback())
-		v.submit(verificationItem{Topic: "t0", Slot: 2, Attestations: []any{2}}, sink.callback())
-		v.submit(verificationItem{Topic: "t1", Slot: 1, Attestations: []any{3}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 1, Attestations: []any{1}}, sink.callback())
+		v.Submit(Item{Topic: "t0", Slot: 2, Attestations: []any{2}}, sink.callback())
+		v.Submit(Item{Topic: "t1", Slot: 1, Attestations: []any{3}}, sink.callback())
 
 		time.Sleep(50 * time.Millisecond)
 
@@ -238,7 +238,7 @@ func TestVerifierMultipleTopicsAndSlots(t *testing.T) {
 }
 
 func TestVerifierSubmitAndWaitMultipleConcurrent(t *testing.T) {
-	// Concurrent submitAndWait callers must each unblock once the batch
+	// Concurrent SubmitAndWait callers must each unblock once the batch
 	// containing their item completes.
 	synctest.Test(t, func(t *testing.T) {
 		v := newTestVerifier(t, func() time.Duration { return 15 * time.Millisecond }, 0, 5*time.Millisecond)
@@ -250,7 +250,7 @@ func TestVerifierSubmitAndWaitMultipleConcurrent(t *testing.T) {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				v.submitAndWait(verificationItem{Topic: "t0", Slot: 1, Attestations: []any{idx}})
+				v.SubmitAndWait(Item{Topic: "t0", Slot: 1, Attestations: []any{idx}})
 				mu.Lock()
 				done[idx] = true
 				mu.Unlock()
@@ -265,17 +265,17 @@ func TestVerifierSubmitAndWaitMultipleConcurrent(t *testing.T) {
 }
 
 func TestVerifierStopAfterStopIsSafe(t *testing.T) {
-	// Documenting current contract: stop() is only safe to call once.
+	// Documenting current contract: Stop is only safe to call once.
 	// (Calling it twice would close v.notify-driven re-entry or, more
 	// importantly, the done channel — guard via require.NotPanics on one
 	// call only).
 	synctest.Test(t, func(t *testing.T) {
-		v := newBatchVerifier(
+		v := New(
 			func() time.Duration { return 1 * time.Millisecond },
 			0, 1*time.Millisecond, slog.Default(),
 		)
-		go v.run()
-		require.NotPanics(t, func() { v.stop() })
+		go v.Run()
+		require.NotPanics(t, func() { v.Stop() })
 	})
 }
 

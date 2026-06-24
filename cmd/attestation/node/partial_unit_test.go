@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
+	"github.com/ethp2p/simlab/cmd/attestation/verify"
 )
 
 // -----------------------------------------------------------------------------
@@ -26,7 +27,7 @@ import (
 const testCommitteeSize = 128
 
 // newPartialUnitManager builds a partial-message manager with a backing
-// batchVerifier suitable for unit tests. No real network is involved.
+// verify.Verifier suitable for unit tests. No real network is involved.
 func newPartialUnitManager(t *testing.T) *partialAttestationManager {
 	t.Helper()
 	node := &Node{
@@ -36,14 +37,14 @@ func newPartialUnitManager(t *testing.T) *partialAttestationManager {
 		PerAttestationVerification: 0,
 		VerificationBatchWindow:    2 * time.Millisecond,
 	}
-	node.verifier = newBatchVerifier(
+	node.verifier = verify.New(
 		node.VerificationDelay,
 		node.PerAttestationVerification,
 		node.VerificationBatchWindow,
 		slog.Default(),
 	)
-	go node.verifier.run()
-	t.Cleanup(func() { node.verifier.stop() })
+	go node.verifier.Run()
+	t.Cleanup(func() { node.verifier.Stop() })
 	return newPartialAttestationManager(node, time.Now(), time.Second, nil)
 }
 

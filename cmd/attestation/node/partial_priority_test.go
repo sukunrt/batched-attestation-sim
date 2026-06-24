@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
+	"github.com/ethp2p/simlab/cmd/attestation/verify"
 )
 
 // -----------------------------------------------------------------------------
@@ -27,7 +28,7 @@ import (
 // -----------------------------------------------------------------------------
 
 // newPriorityUnitManager builds a partial-priority manager with a backing
-// batchVerifier suitable for unit tests. MaxPeersPerAttestation is set high so
+// verify.Verifier suitable for unit tests. MaxPeersPerAttestation is set high so
 // the lifetime ceiling never interferes unless a test lowers it before seeding.
 func newPriorityUnitManager(t *testing.T) *priorityAttestationManager {
 	t.Helper()
@@ -39,14 +40,14 @@ func newPriorityUnitManager(t *testing.T) *priorityAttestationManager {
 		PerAttestationVerification: 0,
 		VerificationBatchWindow:    2 * time.Millisecond,
 	}
-	node.verifier = newBatchVerifier(
+	node.verifier = verify.New(
 		node.VerificationDelay,
 		node.PerAttestationVerification,
 		node.VerificationBatchWindow,
 		slog.Default(),
 	)
-	go node.verifier.run()
-	t.Cleanup(func() { node.verifier.stop() })
+	go node.verifier.Run()
+	t.Cleanup(func() { node.verifier.Stop() })
 	return newPriorityAttestationManager(node, time.Now(), time.Second, nil)
 }
 

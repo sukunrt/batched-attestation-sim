@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
+	"github.com/ethp2p/simlab/cmd/attestation/verify"
 )
 
 // maxIWantPerPosition caps how many gossip peers we ask for any one missing
@@ -749,9 +750,9 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 
 		if len(newEntries) > 0 {
 			data := b.data
-			m.node.verifier.submit(
-				verificationItem{Topic: topic, Slot: slot, Data: data, Attestations: newEntries},
-				func(item verificationItem) {
+			m.node.verifier.Submit(
+				verify.Item{Topic: topic, Slot: slot, Data: data, Attestations: newEntries},
+				func(item verify.Item) {
 					m.markValidated(item.Topic, item.Slot, item.Data, item.Attestations)
 				},
 			)

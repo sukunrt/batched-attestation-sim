@@ -1,4 +1,9 @@
-package node
+// Package verify provides a batch attestation verifier shared by the gossipsub
+// partial-message strategies (package node) and the att_propagation native
+// protocol (package node/attprop). It lives in its own package so both can
+// import it without an import cycle. Item.Attestations is []any so verify needs
+// no node types.
+package verify
 
 import (
 	"log/slog"
@@ -7,11 +12,11 @@ import (
 	"time"
 )
 
-// verificationItem represents attestations submitted for batch verification.
-// Data is the opaque attestation_data the batched attestations share; the
-// partial-mode callback uses it (with Topic, Slot) to find the right state
-// bucket. Empty for classic-mode submissions.
-type verificationItem struct {
+// Item represents attestations submitted for batch verification. Data is the
+// opaque attestation_data the batched attestations share; the partial-mode
+// callback uses it (with Topic, Slot) to find the right state bucket. Empty for
+// classic-mode submissions.
+type Item struct {
 	Slot         int
 	Topic        string
 	Data         []byte
@@ -20,16 +25,16 @@ type verificationItem struct {
 
 // queuedItem pairs a submitted item with its per-submit callback.
 type queuedItem struct {
-	item       verificationItem
-	onVerified func(verificationItem)
+	item       Item
+	onVerified func(Item)
 }
 
-// batchVerifier pipelines attestation verification. submit() pushes items into
-// a mutex-protected queue. run() loops on a timer: every batchWindow it swaps
-// out the accumulated queue, verifies the batch (sleeping for the verification
+// Verifier pipelines attestation verification. Submit pushes items into a
+// mutex-protected queue. Run loops on a timer: every batchWindow it swaps out
+// the accumulated queue, verifies the batch (sleeping for the verification
 // delay), then loops. While one batch verifies, new items accumulate in the
 // queue for the next round.
-type batchVerifier struct {
+type Verifier struct {
 	verificationDelay   func() time.Duration
 	perAttestationDelay time.Duration
 	batchWindow         time.Duration
@@ -42,13 +47,15 @@ type batchVerifier struct {
 	done    chan struct{}
 }
 
-func newBatchVerifier(
+// New constructs a Verifier. Call Run in a goroutine to start the pipeline and
+// Stop to drain and shut it down.
+func New(
 	verificationDelay func() time.Duration,
 	perAttestationDelay time.Duration,
 	batchWindow time.Duration,
 	logger *slog.Logger,
-) *batchVerifier {
-	return &batchVerifier{
+) *Verifier {
+	return &Verifier{
 		verificationDelay:   verificationDelay,
 		perAttestationDelay: perAttestationDelay,
 		batchWindow:         batchWindow,
@@ -58,10 +65,10 @@ func newBatchVerifier(
 	}
 }
 
-// submit enqueues attestations for batch verification. Non-blocking. onVerified
-// is invoked once the containing batch finishes its verification sleep; pass
-// nil if no callback is needed.
-func (v *batchVerifier) submit(item verificationItem, onVerified func(verificationItem)) {
+// Submit enqueues attestations for batch verification. Non-blocking. onVerified
+// is invoked once the containing batch finishes its verification sleep; pass nil
+// if no callback is needed.
+func (v *Verifier) Submit(item Item, onVerified func(Item)) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -73,15 +80,15 @@ func (v *batchVerifier) submit(item verificationItem, onVerified func(verificati
 	}
 }
 
-// submitAndWait enqueues a verification item and blocks until the batch completes.
-func (v *batchVerifier) submitAndWait(item verificationItem) {
+// SubmitAndWait enqueues a verification item and blocks until the batch completes.
+func (v *Verifier) SubmitAndWait(item Item) {
 	done := make(chan struct{})
-	v.submit(item, func(verificationItem) { close(done) })
+	v.Submit(item, func(Item) { close(done) })
 	<-done
 }
 
-// run is the pipeline loop. Call as a goroutine.
-func (v *batchVerifier) run() {
+// Run is the pipeline loop. Call as a goroutine.
+func (v *Verifier) Run() {
 	defer close(v.done)
 
 	timer := time.NewTimer(math.MaxInt64)
@@ -135,7 +142,7 @@ func (v *batchVerifier) run() {
 }
 
 // verifyBatch simulates batch verification and dispatches each item.
-func (v *batchVerifier) verifyBatch(batch []queuedItem) {
+func (v *Verifier) verifyBatch(batch []queuedItem) {
 	if len(batch) == 0 {
 		return
 	}
@@ -152,11 +159,11 @@ func (v *batchVerifier) verifyBatch(batch []queuedItem) {
 	}
 }
 
-// stop signals the pipeline to drain remaining items and exit.
-func (v *batchVerifier) stop() {
+// Stop signals the pipeline to drain remaining items and exit.
+func (v *Verifier) Stop() {
 	v.mu.Lock()
 	v.stopped = true
-	// Wake up run() in case it's waiting on notify.
+	// Wake up Run in case it's waiting on notify.
 	select {
 	case v.notify <- struct{}{}:
 	default:
