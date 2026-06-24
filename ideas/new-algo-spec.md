@@ -189,22 +189,22 @@ our send). Selection walks levels ascending (scarcest first). Deferred to F: mes
   bitmaps + our sends + their sends. Maintained incrementally (popcount-on-flip).
 - "Send completes when Write returns" is a QUIC send-buffer proxy, not peer receipt — fine as a
   backpressure signal, not as a delivery guarantee.
-- **Prototyping risk (test harness):** the eventloop + per-peer sender goroutines + stream writes
-  must stay deterministic under `synctest` (the existing simnet test harness). Verify early.
-- **Prototyping risk (backpressure):** the "Write returns = slot frees" signal only reflects
-  congestion if the network models stream flow control. Confirm `simnet` blocks Write under a full
-  window; if it doesn't, the send-queue mechanism can't be exercised in simnet and needs a Shadow
-  run (or a backpressure shim) to validate.
+- Prototyping risk (test harness) — MOSTLY RESOLVED: raw streams + framing are deterministic under
+  `synctest` (`TestAttPropRawStreamSmoke`); the full eventloop + sender pool still needs the same
+  care when built, but the substrate is proven.
+- Prototyping risk (backpressure) — RESOLVED: simnet runs real libp2p/QUIC, so stream Write blocks
+  under a full flow-control window — the "Write returns = slot frees" signal is real.
 - Holder-count is a LOCAL-view sample (bitmaps from bitmap peers + our/their sends), not global
   truth — scarcity decisions are approximate, which is fine for gossip.
 
 ## Prototype plan (build order)
 De-risk first, then the vertical slice, then the scarcity/bitmap layer, then measure.
 
-0. **De-risk (simnet+synctest):** two nodes, one persistent framed stream. Confirm (a) the
-   eventloop + sender goroutines stay deterministic under `synctest`, and (b) `simnet` blocks Write
-   under a full flow-control window (else the send-queue mechanism needs Shadow or a shim). Gate
-   the rest on this.
+0. **De-risk (simnet+synctest) — DONE ✓.** (b) Backpressure is a non-issue: simnet runs real
+   libp2p/QUIC, so Write blocks under a full flow-control window. (a) A custom raw-stream protocol
+   with persistent length-prefixed protobuf framing runs deterministically under `synctest` —
+   proven by `cmd/attestation/node/attprop_smoke_test.go` (`TestAttPropRawStreamSmoke`). Substrate
+   confirmed; the full eventloop + sender pool still needs the same synctest care when built.
 1. **Wire + streams:** control proto (Graft/Prune × {push,bitmap,full}); reuse pb data/bitmap
    types; open the 3 per-topic streams (lower-peerID opens); length-prefixed framing; handlers
    route to the manager.
