@@ -87,16 +87,20 @@ func markPeerSentFull(sent map[peer.ID]map[string]struct{}, p peer.ID, hash []by
 	perPeer[attestationHashKey(hash)] = struct{}{}
 }
 
-func setBatchIdentity(batch *pb.BatchedAttestation, b *AttestationState, full bool) {
-	if full && len(b.data) > 0 {
+func setBatchIdentity(batch *pb.BatchedAttestation, b *AttestationState, includeFullData bool) {
+	if includeFullData && len(b.data) > 0 {
 		batch.AttestationData = b.data
 		return
 	}
 	batch.AttestationDataHash = b.dataHash
 }
 
-func setMetadataIdentity(md *pb.CommitteeAttestationPartsMetadata, b *AttestationState, full bool) {
-	if full && len(b.data) > 0 {
+func setMetadataIdentity(
+	md *pb.CommitteeAttestationPartsMetadata,
+	b *AttestationState,
+	includeFullData bool,
+) {
+	if includeFullData && len(b.data) > 0 {
 		md.AttestationData = b.data
 		return
 	}

@@ -521,15 +521,14 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 		m.sentFull = make(map[peer.ID]map[string]struct{})
 	}
 	env := &pb.BatchedAttestationEnvelope{}
-	bks := chunkBucketKeys(chunk)
 	var total int
-	var fullHashes [][]byte
-	for _, bk := range bks {
+	var sentFullDataHashes [][]byte
+	for bk := range chunk {
 		b := ss.buckets[bk]
-		full := !peerSentFull(m.sentFull, p, b.dataHash) && len(b.data) > 0
-		env.Batches = append(env.Batches, encodeBatch(b, chunk[bk], full))
-		if full {
-			fullHashes = append(fullHashes, b.dataHash)
+		includeFullData := !peerSentFull(m.sentFull, p, b.dataHash) && len(b.data) > 0
+		env.Batches = append(env.Batches, encodeBatch(b, chunk[bk], includeFullData))
+		if includeFullData {
+			sentFullDataHashes = append(sentFullDataHashes, b.dataHash)
 		}
 		total += len(chunk[bk])
 	}
@@ -553,7 +552,7 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 		return
 	}
 	s.inFlight = true
-	for _, hash := range fullHashes {
+	for _, hash := range sentFullDataHashes {
 		markPeerSentFull(m.sentFull, p, hash)
 	}
 	m.activeData++
@@ -562,7 +561,7 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 		"topic", m.cfg.TopicIndex,
 		"role", int(m.mesh.role(p)),
 		"slot", ss.slot,
-		"num_buckets", len(bks),
+		"num_buckets", len(chunk),
 		"positions", total,
 		"bytes", len(frame),
 	)

@@ -585,9 +585,9 @@ func (m *priorityAttestationManager) encodeBatchForPeer(
 		AttestorIndices: idxs,
 		Signatures:      sigs,
 	}
-	full := !peerSentFull(m.sentDataFull, p, b.dataHash) && len(b.data) > 0
-	setBatchIdentity(batch, b, full)
-	if full {
+	includeFullData := !peerSentFull(m.sentDataFull, p, b.dataHash) && len(b.data) > 0
+	setBatchIdentity(batch, b, includeFullData)
+	if includeFullData {
 		markPeerSentFull(m.sentDataFull, p, b.dataHash)
 	}
 	return batch
@@ -598,9 +598,9 @@ func (m *priorityAttestationManager) setMetadataIdentityForPeer(
 	b *AttestationState,
 	md *pb.CommitteeAttestationPartsMetadata,
 ) {
-	full := !peerSentFull(m.sentMetaFull, p, b.dataHash) && len(b.data) > 0
-	setMetadataIdentity(md, b, full)
-	if full {
+	includeFullData := !peerSentFull(m.sentMetaFull, p, b.dataHash) && len(b.data) > 0
+	setMetadataIdentity(md, b, includeFullData)
+	if includeFullData {
 		markPeerSentFull(m.sentMetaFull, p, b.dataHash)
 	}
 }

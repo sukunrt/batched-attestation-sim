@@ -59,12 +59,12 @@ func TestBitmapWriterClonesQueuedMetadata(t *testing.T) {
 
 func TestBitmapWriterKeepsFirstFullDataThroughCoalescing(t *testing.T) {
 	w := testBitmapWriter()
-	full := testBitmapMetadata(1, "data", []byte{0x01})
+	fullDataMetadata := testBitmapMetadata(1, "data", []byte{0x01})
 	hashOnly := testBitmapMetadata(1, "data", []byte{0x03})
 	hashOnly.AttestationData = nil
 	hashOnly.AttestationDataHash = hashAttestationData([]byte("data"))
 
-	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{full})
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{fullDataMetadata})
 	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{hashOnly})
 
 	<-w.work
@@ -73,7 +73,7 @@ func TestBitmapWriterKeepsFirstFullDataThroughCoalescing(t *testing.T) {
 	require.Equal(t, []byte("data"), first.Metadatas[0].AttestationData)
 	require.Equal(t, []byte{0x03}, first.Metadatas[0].Available)
 
-	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{full})
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{fullDataMetadata})
 	<-w.work
 	second := w.getNextBitmap()
 	require.Len(t, second.Metadatas, 1)

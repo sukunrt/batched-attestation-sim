@@ -292,7 +292,7 @@ OUTER:
 // encodeBatch builds a BatchedAttestation for the given positions, emitting
 // AttestorIndices and Signatures in the same order as positions. Caller must
 // ensure every position exists in b.atts.
-func encodeBatch(b *bucket, positions []int, full bool) *pb.BatchedAttestation {
+func encodeBatch(b *bucket, positions []int, includeFullData bool) *pb.BatchedAttestation {
 	idxs := make([]uint32, 0, len(positions))
 	sigs := make([][]byte, 0, len(positions))
 	for _, pos := range positions {
@@ -303,7 +303,7 @@ func encodeBatch(b *bucket, positions []int, full bool) *pb.BatchedAttestation {
 		AttestorIndices: idxs,
 		Signatures:      sigs,
 	}
-	if full && len(b.data) > 0 {
+	if includeFullData && len(b.data) > 0 {
 		batch.AttestationData = b.data
 	} else {
 		batch.AttestationDataHash = b.dataHash
