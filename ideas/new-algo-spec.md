@@ -107,7 +107,7 @@ Each section (A–H) lists decisions. `DECIDED:` = locked. `OPEN:` = still discu
   `CommitteeAttestationPartsMetadata` with `available` only (no `requests` — there is no IWANT),
   one per active bucket, on the bitmap stream. Send full current bitmap on a fresh Graft:Bitmap.
 - D2 Trigger = **count (+K, K=30 default) PLUS a periodic floor**. Floor interval sits between the
-  20 ms push tick and the 700 ms heartbeat — default **~100 ms** (configurable). Floor re-emits the
+  20 ms push tick and the 700 ms heartbeat — default **50 ms** (configurable). Floor re-emits the
   current bitmap only if it changed since last emit.
 - D3 Bitmaps only to bitmap-mesh peers; push peers infer our state from the data we send them.
 
@@ -161,7 +161,7 @@ our send). Selection walks levels ascending (scarcest first). Deferred to F: mes
   `sendAllToPushMesh` = false between ticks, set true each 20 ms tick; while true the loop flushes
   every push peer's pending batch (incl. partial), then sets it back to false. Net: full push
   batches go immediately anytime; partial push batches wait for the tick (batching floor) and
-  bitmap fills the gap; push latency is bounded by the 20 ms tick. (~100 ms floor still drives
+  bitmap fills the gap; push latency is bounded by the 20 ms tick. (50 ms floor still drives
   bitmap advertisements on the bitmap stream.)
 
 ### G. Fanout & receive (DECIDED)
@@ -218,7 +218,7 @@ De-risk first, then the vertical slice, then the scarcity/bitmap layer, then mea
    `available`, validated gate via `batchVerifier`.
 4. **Send eventloop (F) — the core:** budget B, push-priority, `sendAllToPushMesh` tick batching,
    bitmap fill, Write-completion. Reuse the de-risked sender.
-5. **Bitmap stream (D):** full-bitmap advertisements, +K trigger + ~100 ms floor, feed holder-count.
+5. **Bitmap stream (D):** full-bitmap advertisements, +K trigger + 50 ms floor, feed holder-count.
 6. **Fanout (G):** eager inject to `fanout_node_mesh_peers`; reset inbound.
 7. **Plumbing (H):** `att_propagation` flag through simctl / config / main; analysis mode detection.
 8. **Measure:** Shadow smoke, then the 500/2000 comparison vs partial-priority on the p90–p99.9 tail.

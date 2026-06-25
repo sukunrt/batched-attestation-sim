@@ -65,12 +65,12 @@ type SimConfig struct {
 	AttPropBitmapD     int `yaml:"attprop_bitmap_d"`
 	AttPropBitmapDhigh int `yaml:"attprop_bitmap_dhigh"`
 
-	// §F1 send budget B (default 4), §E3 lifetime per-position peer ceiling
-	// (default 30, set generously ≥ D).
+	// §F1 send budget B (default 4), initial holder-count index capacity
+	// (default 30).
 	AttPropSendBudgetB    int `yaml:"attprop_send_budget_b"`
 	AttPropMaxPeersPerAtt int `yaml:"attprop_max_peers_per_att"`
 
-	// §F4 tick (default 20ms), §D2 bitmap floor (default 100ms),
+	// §F4 tick (default 20ms), §D2 bitmap floor (default 50ms),
 	// §C2 heartbeat (default 700ms), §C7 prune backoff (default 60s).
 	AttPropTickIntervalMs        int `yaml:"attprop_tick_interval_ms"`
 	AttPropBitmapFloorIntervalMs int `yaml:"attprop_bitmap_floor_interval_ms"`
@@ -128,7 +128,7 @@ func (s *SimConfig) AttPropConfig() node.AttPropParams {
 		MaxAttsPerMessage:   s.EffectiveMaxAttestationsPerMessage(),
 		MaxPeersPerAtt:      pick(s.AttPropMaxPeersPerAtt, 30),
 		TickInterval:        ms(s.AttPropTickIntervalMs, 20),
-		BitmapFloorInterval: ms(s.AttPropBitmapFloorIntervalMs, 100),
+		BitmapFloorInterval: ms(s.AttPropBitmapFloorIntervalMs, 50),
 		HeartbeatInterval:   ms(s.AttPropHeartbeatIntervalMs, 700),
 		PruneBackoff:        time.Duration(pick(s.AttPropPruneBackoffSeconds, 60)) * time.Second,
 	}

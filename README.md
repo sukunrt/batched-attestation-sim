@@ -200,7 +200,7 @@ other tunable is optional — leave it unset (or 0) to take the protocol default
 | `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |
 | `attprop_max_peers_per_att` | 30 | initial holder-count index capacity |
 | `attprop_tick_interval_ms` | 20 | send tick |
-| `attprop_bitmap_floor_interval_ms` | 100 | minimum spacing between bitmap advertisements |
+| `attprop_bitmap_floor_interval_ms` | 50 | minimum spacing between bitmap advertisements |
 | `attprop_heartbeat_interval_ms` | 700 | mesh-maintenance heartbeat |
 | `attprop_prune_backoff_seconds` | 60 | backoff after a prune before re-grafting |
 

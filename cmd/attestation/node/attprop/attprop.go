@@ -87,7 +87,7 @@ type Config struct {
 	// and MaxPeersPerAtt as the initial holder-count index capacity.
 	SendBudgetB, MaxAttsPerMessage, MaxPeersPerAtt int
 
-	// §F4 TickInterval (20ms), §D2 BitmapFloorInterval (~100ms),
+	// §F4 TickInterval (20ms), §D2 BitmapFloorInterval (50ms),
 	// §C2 HeartbeatInterval (~700ms), §C7 PruneBackoff (60s).
 	TickInterval, BitmapFloorInterval, HeartbeatInterval, PruneBackoff time.Duration
 

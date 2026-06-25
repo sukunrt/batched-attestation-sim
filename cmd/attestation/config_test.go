@@ -44,7 +44,7 @@ func TestAttPropConfigDefaults(t *testing.T) {
 		BitmapDlow: 14, BitmapD: 16, BitmapDhigh: 16,
 		SendBudgetB: 4, MaxAttsPerMessage: node.MaxAttestationsPerMessage, MaxPeersPerAtt: 30,
 		TickInterval:        20 * time.Millisecond,
-		BitmapFloorInterval: 100 * time.Millisecond,
+		BitmapFloorInterval: 50 * time.Millisecond,
 		HeartbeatInterval:   700 * time.Millisecond,
 		PruneBackoff:        60 * time.Second,
 	}
