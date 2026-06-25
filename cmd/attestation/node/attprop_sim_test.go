@@ -46,7 +46,9 @@ func openStreams(t *testing.T, nw *testNetwork, nodes []*Node, a, b int) {
 	if err != nil {
 		t.Fatalf("connect %d->%d: %v", opener, other, err)
 	}
-	nodes[opener].attProp.ConnectPeer(otherID)
+	for _, m := range nodes[opener].attProp {
+		m.ConnectPeer(otherID)
+	}
 }
 
 // TestAttProp32MeshPropagation is the full-protocol integration gate: 32 mesh
@@ -89,7 +91,6 @@ func TestAttProp32MeshPropagation(t *testing.T) {
 				Host:                 nw.hosts[i],
 			}
 			nodes[i].Start(ctx)
-			t.Cleanup(nodes[i].verifier.Stop)
 		}
 
 		// Circulant degree-8 topology: every (i, i+k mod n) for k in 1..4. Each
@@ -110,7 +111,7 @@ func TestAttProp32MeshPropagation(t *testing.T) {
 		topic0 := topicName(0)
 		full, minSeen := 0, committeeSize
 		for i, n := range nodes {
-			got := n.attProp.ValidatedCount(topic0, 1)
+			got := n.attProp[topic0].ValidatedCount(1)
 			if got < minSeen {
 				minSeen = got
 			}
@@ -166,7 +167,6 @@ func TestAttPropTwoTopicMeshPropagation(t *testing.T) {
 				Host:                nw.hosts[i],
 			}
 			nodes[i].Start(ctx)
-			t.Cleanup(nodes[i].verifier.Stop)
 		}
 
 		openStreams(t, nw, nodes, 0, 1)
@@ -181,7 +181,7 @@ func TestAttPropTwoTopicMeshPropagation(t *testing.T) {
 		for topic := range numTopics {
 			name := topicName(topic)
 			for i, n := range nodes {
-				got := n.attProp.ValidatedCount(name, 1)
+				got := n.attProp[name].ValidatedCount(1)
 				if got != committeeSize {
 					t.Fatalf("node %d topic %d validated %d/%d", i, topic, got, committeeSize)
 				}
@@ -242,7 +242,6 @@ func TestAttProp32FanoutInjection(t *testing.T) {
 		}
 		for _, n := range nodes {
 			n.Start(ctx)
-			t.Cleanup(n.verifier.Stop)
 		}
 
 		// Each fanout dials every receiver; FanoutPublish then opens a push stream
@@ -272,7 +271,7 @@ func TestAttProp32FanoutInjection(t *testing.T) {
 
 		topic0 := topicName(0)
 		for r := range numReceivers {
-			got := nodes[r].attProp.ValidatedCount(topic0, 1)
+			got := nodes[r].attProp[topic0].ValidatedCount(1)
 			if got != numFanout {
 				t.Fatalf("receiver %d validated %d/%d injected positions", r, got, numFanout)
 			}

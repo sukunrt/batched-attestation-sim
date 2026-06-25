@@ -92,8 +92,9 @@ func (sn *simNet) addr(nodeNum int) ma.Multiaddr { return sn.hosts[nodeNum].Addr
 // registration, dial, framing, decode), whose code paths never touch them.
 func newTestManager(h host.Host) *Manager {
 	return New(h, nil, nil, Config{
-		Logger: slog.Default(),
-		Topics: []string{"/eth2/topic0"},
+		Logger:     slog.Default(),
+		Topic:      "/eth2/topic0",
+		TopicIndex: 0,
 	})
 }
 

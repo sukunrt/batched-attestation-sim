@@ -46,10 +46,12 @@ func TestAttPropStartNoGossipsub(t *testing.T) {
 			SlotDuration:        time.Second,
 		}
 		n.Start(ctx)
-		t.Cleanup(n.verifier.Stop)
 
 		if n.attProp == nil {
-			t.Fatal("att_propagation: attProp manager is nil after Start")
+			t.Fatal("att_propagation: attProp manager map is nil after Start")
+		}
+		if len(n.attProp) != 1 || n.attProp[topicName(0)] == nil {
+			t.Fatalf("att_propagation: managers=%v, want one manager keyed by topic", n.attProp)
 		}
 		if n.ps != nil {
 			t.Fatal("att_propagation: gossipsub (ps) must not be created")

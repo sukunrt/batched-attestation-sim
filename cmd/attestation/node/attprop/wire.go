@@ -52,11 +52,9 @@ func (m *Manager) newFrameReader(s network.Stream) msgio.ReadCloser {
 // reader goroutine that drains framed messages until the remote half-closes
 // (EOF) or resets.
 func (m *Manager) start(ctx context.Context) {
-	for topicIdx := range m.cfg.Topics {
-		m.host.SetStreamHandler(PushProtocol(topicIdx), m.inboundHandler(ctx, topicIdx, kindPush))
-		m.host.SetStreamHandler(BitmapProtocol(topicIdx), m.inboundHandler(ctx, topicIdx, kindBitmap))
-		m.host.SetStreamHandler(ControlProtocol(topicIdx), m.inboundHandler(ctx, topicIdx, kindControl))
-	}
+	m.host.SetStreamHandler(PushProtocol(m.cfg.TopicIndex), m.inboundHandler(ctx, kindPush))
+	m.host.SetStreamHandler(BitmapProtocol(m.cfg.TopicIndex), m.inboundHandler(ctx, kindBitmap))
+	m.host.SetStreamHandler(ControlProtocol(m.cfg.TopicIndex), m.inboundHandler(ctx, kindControl))
 }
 
 // inboundHandler returns a network.StreamHandler for an accepted stream of the
@@ -65,21 +63,19 @@ func (m *Manager) start(ctx context.Context) {
 // for writes back to that peer.
 func (m *Manager) inboundHandler(
 	ctx context.Context,
-	topicIdx int,
 	kind streamKind,
 ) network.StreamHandler {
 	return func(s network.Stream) {
 		p := s.Conn().RemotePeer()
-		if streams, ok := m.recordInboundStream(topicIdx, p, kind, s); ok {
+		if streams, ok := m.recordInboundStream(p, kind, s); ok {
 			m.post(peerUpEvent{
-				topic:   topicIdx,
 				peer:    p,
 				push:    streams.push,
 				bitmap:  streams.bitmap,
 				control: streams.control,
 			})
 		}
-		go m.readLoop(ctx, topicIdx, s, p, kind)
+		go m.readLoop(ctx, s, p, kind)
 	}
 }
 
@@ -87,43 +83,41 @@ func (m *Manager) inboundHandler(
 // connected. The accepting side uses those same streams for its writes; it does
 // not open a second stream set back.
 func (m *Manager) connectPeer(p peer.ID) {
-	for topicIdx := range m.cfg.Topics {
-		go m.openSendStreams(context.Background(), topicIdx, p)
-	}
+	go m.openSendStreams(context.Background(), p)
 }
 
 // openSendStreams opens this node's three bidirectional streams to a peer, starts
 // readers for the peer's frames on those same streams, and posts a peerUpEvent
 // carrying the writers. The once map guards against opening twice.
-func (m *Manager) openSendStreams(ctx context.Context, topicIdx int, p peer.ID) {
-	if !m.markSendStreamsOpening(topicIdx, p) {
+func (m *Manager) openSendStreams(ctx context.Context, p peer.ID) {
+	if !m.markSendStreamsOpening(p) {
 		return // already opening/open for this peer
 	}
-	push, err := m.host.NewStream(ctx, p, PushProtocol(topicIdx))
+	push, err := m.host.NewStream(ctx, p, PushProtocol(m.cfg.TopicIndex))
 	if err != nil {
-		m.logger.Error("open push stream", "topic", topicIdx, "peer", shortPeer(p), "err", err)
-		m.clearSendStreamsOpening(topicIdx, p)
+		m.logger.Error("open push stream", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "err", err)
+		m.clearSendStreamsOpening(p)
 		return
 	}
-	bm, err := m.host.NewStream(ctx, p, BitmapProtocol(topicIdx))
+	bm, err := m.host.NewStream(ctx, p, BitmapProtocol(m.cfg.TopicIndex))
 	if err != nil {
-		m.logger.Error("open bitmap stream", "topic", topicIdx, "peer", shortPeer(p), "err", err)
+		m.logger.Error("open bitmap stream", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "err", err)
 		push.Reset()
-		m.clearSendStreamsOpening(topicIdx, p)
+		m.clearSendStreamsOpening(p)
 		return
 	}
-	ctrl, err := m.host.NewStream(ctx, p, ControlProtocol(topicIdx))
+	ctrl, err := m.host.NewStream(ctx, p, ControlProtocol(m.cfg.TopicIndex))
 	if err != nil {
-		m.logger.Error("open control stream", "topic", topicIdx, "peer", shortPeer(p), "err", err)
+		m.logger.Error("open control stream", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "err", err)
 		push.Reset()
 		bm.Reset()
-		m.clearSendStreamsOpening(topicIdx, p)
+		m.clearSendStreamsOpening(p)
 		return
 	}
-	go m.readLoop(ctx, topicIdx, push, p, kindPush)
-	go m.readLoop(ctx, topicIdx, bm, p, kindBitmap)
-	go m.readLoop(ctx, topicIdx, ctrl, p, kindControl)
-	m.post(peerUpEvent{topic: topicIdx, peer: p, push: push, bitmap: bm, control: ctrl})
+	go m.readLoop(ctx, push, p, kindPush)
+	go m.readLoop(ctx, bm, p, kindBitmap)
+	go m.readLoop(ctx, ctrl, p, kindControl)
+	m.post(peerUpEvent{peer: p, push: push, bitmap: bm, control: ctrl})
 }
 
 // recordInboundStream collects the three accepted bidirectional streams for one
@@ -131,16 +125,15 @@ func (m *Manager) openSendStreams(ctx context.Context, topicIdx int, p peer.ID) 
 // present; fanout's one-shot push stream never completes a set, which is fine
 // because receivers do not write back to fanout leaves.
 func (m *Manager) recordInboundStream(
-	topicIdx int, p peer.ID, kind streamKind, s network.Stream,
+	p peer.ID, kind streamKind, s network.Stream,
 ) (*peerStreams, bool) {
 	m.streamsMu.Lock()
 	defer m.streamsMu.Unlock()
 
-	k := topicPeer{topic: topicIdx, peer: p}
-	streams := m.pending[k]
+	streams := m.pending[p]
 	if streams == nil {
 		streams = &peerStreams{}
-		m.pending[k] = streams
+		m.pending[p] = streams
 	}
 	switch kind {
 	case kindPush:
@@ -153,7 +146,7 @@ func (m *Manager) recordInboundStream(
 	if streams.push == nil || streams.bitmap == nil || streams.control == nil {
 		return nil, false
 	}
-	delete(m.pending, k)
+	delete(m.pending, p)
 	return streams, true
 }
 
@@ -164,7 +157,6 @@ func (m *Manager) recordInboundStream(
 // state.
 func (m *Manager) readLoop(
 	ctx context.Context,
-	topicIdx int,
 	s network.Stream,
 	from peer.ID,
 	kind streamKind,
@@ -181,19 +173,19 @@ func (m *Manager) readLoop(
 				s.Reset()
 				m.logger.Debug("read frame", "peer", shortPeer(from), "kind", kind, "err", err)
 			}
-			m.post(peerDownEvent{topic: topicIdx, peer: from})
+			m.post(peerDownEvent{peer: from})
 			return
 		}
 		if len(b) == 0 {
 			r.ReleaseMsg(b)
 			continue
 		}
-		ev, derr := decodeFrame(topicIdx, from, kind, b)
+		ev, derr := decodeFrame(from, kind, b)
 		r.ReleaseMsg(b)
 		if derr != nil {
 			s.Reset()
 			m.logger.Warn("decode frame", "peer", shortPeer(from), "kind", kind, "err", derr)
-			m.post(peerDownEvent{topic: topicIdx, peer: from})
+			m.post(peerDownEvent{peer: from})
 			return
 		}
 		if !m.post(ev) {
@@ -211,26 +203,26 @@ func (m *Manager) readLoop(
 }
 
 // decodeFrame unmarshals one frame into the inbound event for its stream kind.
-func decodeFrame(topicIdx int, from peer.ID, kind streamKind, b []byte) (event, error) {
+func decodeFrame(from peer.ID, kind streamKind, b []byte) (event, error) {
 	switch kind {
 	case kindPush:
 		env := &pb.BatchedAttestationEnvelope{}
 		if err := proto.Unmarshal(b, env); err != nil {
 			return nil, err
 		}
-		return inboundDataEvent{topic: topicIdx, from: from, env: env}, nil
+		return inboundDataEvent{from: from, env: env}, nil
 	case kindBitmap:
 		ctrl := &pb.ControlEnvelope{}
 		if err := proto.Unmarshal(b, ctrl); err != nil {
 			return nil, err
 		}
-		return inboundBitmapEvent{topic: topicIdx, from: from, ctrl: ctrl}, nil
+		return inboundBitmapEvent{from: from, ctrl: ctrl}, nil
 	case kindControl:
 		ctrl := &pb.AttPropControl{}
 		if err := proto.Unmarshal(b, ctrl); err != nil {
 			return nil, err
 		}
-		return inboundControlEvent{topic: topicIdx, from: from, ctrl: ctrl}, nil
+		return inboundControlEvent{from: from, ctrl: ctrl}, nil
 	default:
 		return nil, errUnknownKind
 	}

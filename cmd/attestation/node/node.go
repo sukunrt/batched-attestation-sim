@@ -115,7 +115,7 @@ type Node struct {
 	subs            []*pubsub.Subscription
 	partial         *partialAttestationManager
 	partialPriority *priorityAttestationManager
-	attProp         *attprop.Manager
+	attProp         map[string]*attprop.Manager
 }
 
 // AttPropParams are the att_propagation mesh/send tunables (spec §C1/§D2/§F),
@@ -244,59 +244,58 @@ func topicName(index int) string {
 	return fmt.Sprintf("/eth2/00000000/beacon_attestation_%d/ssz_snappy", index)
 }
 
-// startAttProp brings the node up in att_propagation mode: build the shared
-// verifier and the attprop Manager, register its stream handlers. No gossipsub
-// is created and no topics are joined — the native protocol replaces both.
+// startAttProp brings the node up in att_propagation mode: build one manager per
+// topic and register each manager's stream handlers. No gossipsub is created and
+// no topics are joined — the native protocol replaces both.
 func (n *Node) startAttProp(ctx context.Context) {
 	n.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelInfo,
 	})).With("node", n.Num)
 
-	n.verifier = verify.New(
-		n.VerificationDelay,
-		n.PerAttestationVerification,
-		n.VerificationBatchWindow,
-		slog.With("node", n.Num, "component", "verifier"),
-	)
-	go n.verifier.Run()
-
-	topics := make([]string, n.NumTopics)
-	for i := range n.NumTopics {
-		topics[i] = topicName(i)
-	}
-
 	p := n.AttProp
-	cfg := attprop.Config{
-		Logger:              slog.With("node", n.Num, "component", "attprop"),
-		NodeNum:             n.Num,
-		Topics:              topics,
-		CommitteeSize:       n.CommitteeSize,
-		PublishStart:        n.PublishStart,
-		SlotDuration:        n.SlotDuration,
-		Fanout:              n.Fanout,
-		PushDlow:            p.PushDlow,
-		PushD:               p.PushD,
-		PushDhigh:           p.PushDhigh,
-		BitmapLow:           p.BitmapLow,
-		BitmapTarget:        p.BitmapTarget,
-		BitmapHigh:          p.BitmapHigh,
-		SendBudgetB:         p.SendBudgetB,
-		MaxAttsPerMessage:   p.MaxAttsPerMessage,
-		MaxPeersPerAtt:      p.MaxPeersPerAtt,
-		TickInterval:        p.TickInterval,
-		BitmapFloorInterval: p.BitmapFloorInterval,
-		HeartbeatInterval:   p.HeartbeatInterval,
-		PruneBackoff:        p.PruneBackoff,
+	n.attProp = make(map[string]*attprop.Manager, n.NumTopics)
+	for topicIdx := range n.NumTopics {
+		name := topicName(topicIdx)
+		v := verify.New(
+			n.VerificationDelay,
+			n.PerAttestationVerification,
+			n.VerificationBatchWindow,
+			slog.With("node", n.Num, "component", "verifier", "topic", topicIdx),
+		)
+		go v.Run()
+		cfg := attprop.Config{
+			Logger:              slog.With("node", n.Num, "component", "attprop", "topic", topicIdx),
+			NodeNum:             n.Num,
+			Topic:               name,
+			TopicIndex:          topicIdx,
+			CommitteeSize:       n.CommitteeSize,
+			PublishStart:        n.PublishStart,
+			SlotDuration:        n.SlotDuration,
+			Fanout:              n.Fanout,
+			PushDlow:            p.PushDlow,
+			PushD:               p.PushD,
+			PushDhigh:           p.PushDhigh,
+			BitmapLow:           p.BitmapLow,
+			BitmapTarget:        p.BitmapTarget,
+			BitmapHigh:          p.BitmapHigh,
+			SendBudgetB:         p.SendBudgetB,
+			MaxAttsPerMessage:   p.MaxAttsPerMessage,
+			MaxPeersPerAtt:      p.MaxPeersPerAtt,
+			TickInterval:        p.TickInterval,
+			BitmapFloorInterval: p.BitmapFloorInterval,
+			HeartbeatInterval:   p.HeartbeatInterval,
+			PruneBackoff:        p.PruneBackoff,
+		}
+		m := attprop.New(n.Host, v, n.attPropTracer(), cfg)
+		m.Start(ctx)
+		// Run each topic eventloop under the node's lifecycle context, not a
+		// short-lived one scoped to Run(): it must outlive Run so post-run reads
+		// in tests still reach the eventloop. Cancelling ctx tears it down.
+		go m.Run(ctx)
+		context.AfterFunc(ctx, v.Stop)
+		n.attProp[name] = m
 	}
-	n.attProp = attprop.New(n.Host, n.verifier, n.attPropTracer(), cfg)
-	n.attProp.Start(ctx)
-	// Run the eventloop under the node's lifecycle context, not a short-lived one
-	// scoped to Run(): it must outlive Run so post-run reads (e.g. ValidatedCount
-	// in tests) still reach the eventloop. Cancelling ctx (process shutdown / test
-	// cleanup) tears down the eventloop; the verifier stops with it.
-	go n.attProp.Run(ctx)
-	context.AfterFunc(ctx, n.verifier.Stop)
 
 	n.logger.Info("started", "fanout", n.Fanout, "mode", "att_propagation")
 }
@@ -391,7 +390,9 @@ func (n *Node) ConnectToPeers(peers []int) {
 			if n.AttPropagation {
 				// The connecting side opens one bidirectional stream per message type;
 				// the peer uses those same streams through its inbound handlers.
-				n.attProp.ConnectPeer(peerID)
+				for _, m := range n.attProp {
+					m.ConnectPeer(peerID)
+				}
 			}
 		})
 	}
@@ -642,9 +643,9 @@ func (n *Node) selfPublishAttProp(slot int) {
 		data := n.attestationDataForSlot(slot, name)
 		digest := attDigest(data)
 		if n.Fanout {
-			n.attProp.FanoutPublish(name, slot, m.Position, sig, data)
+			n.attProp[name].FanoutPublish(slot, m.Position, sig, data)
 		} else {
-			n.attProp.PublishLocal(name, slot, m.Position, sig, data)
+			n.attProp[name].PublishLocal(slot, m.Position, sig, data)
 		}
 		n.logger.Info("self_published",
 			"slot", slot,

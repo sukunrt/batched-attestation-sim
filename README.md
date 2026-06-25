@@ -179,8 +179,10 @@ default-off as a tool to revisit.
 
 `att_propagation` is a third forwarding mode that replaces GossipSub with a native libp2p protocol.
 Each peer connection keeps three persistent bidirectional per-topic streams — push (eager batched
-data), bitmap (periodic have-set advertisement), and control (mesh graft/prune) — and forwards by
-holder-count scarcity (prefer the attestations the fewest peers are known to hold). Enable it with:
+data), bitmap (periodic have-set advertisement), and control (mesh graft/prune) — and each topic
+runs an independent manager/eventloop with its own mesh, state, verifier, and send budget. It
+forwards by holder-count scarcity (prefer the attestations the fewest peers are known to hold).
+Enable it with:
 
 ```yaml
 att_propagation: true
@@ -194,7 +196,7 @@ other tunable is optional — leave it unset (or 0) to take the protocol default
 | --- | --- | --- |
 | `attprop_push_dlow` / `attprop_push_d` / `attprop_push_dhigh` | 4 / 5 / 5 | push-mesh sizes (low = top-up trigger, D = high = hard cap) |
 | `attprop_bitmap_low` / `attprop_bitmap_target` / `attprop_bitmap_high` | 14 / 16 / 16 | bitmap-mesh sizes |
-| `attprop_send_budget_b` | 4 | per-tick send budget B |
+| `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |
 | `attprop_max_peers_per_att` | 30 | per-position lifetime peer ceiling (set generously ≥ D) |
 | `attprop_tick_interval_ms` | 20 | send tick |
 | `attprop_bitmap_floor_interval_ms` | 100 | minimum spacing between bitmap advertisements |

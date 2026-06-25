@@ -63,7 +63,8 @@ func weOpen(self, other peer.ID) bool {
 type Config struct {
 	Logger        *slog.Logger
 	NodeNum       int
-	Topics        []string  // topic names, indexed by topic ID
+	Topic         string    // topic name managed by this Manager
+	TopicIndex    int       // stable topic ID used for protocol IDs and log tagging
 	CommitteeSize int       // wire-level bitmap capacity (= num_attestors per topic)
 	PublishStart  time.Time // wall-clock start of slot 1 (for latency logging)
 	SlotDuration  time.Duration
@@ -74,7 +75,7 @@ type Config struct {
 	PushDlow, PushD, PushDhigh          int
 	BitmapLow, BitmapTarget, BitmapHigh int
 
-	// §F1 SendBudgetB (default 4), §F3 MaxAttsPerMessage N (default 30),
+	// §F1 per-topic SendBudgetB (default 4), §F3 MaxAttsPerMessage N (default 30),
 	// §E3 MaxPeersPerAtt lifetime ceiling.
 	SendBudgetB, MaxAttsPerMessage, MaxPeersPerAtt int
 
@@ -93,8 +94,8 @@ type Tracer interface {
 	OnPartialReceive(slot, topicIdx, position int, attData []byte, latencyMs int64)
 }
 
-// Manager owns all att_propagation state for one node across all its topics. A
-// single eventloop goroutine (Run) owns the mutable state; readers and senders
+// Manager owns all att_propagation state for one node on one topic. A single
+// eventloop goroutine (Run) owns the mutable state; readers and senders
 // own none and communicate via the events channel. Dropping gossipsub means no
 // external caller races in, so the manager is effectively single-threaded —
 // this is what keeps it deterministic under synctest (see the eventloop design
@@ -109,32 +110,27 @@ type Manager struct {
 	// self is the local peer ID, cached for weOpen comparisons.
 	self peer.ID
 
-	// topicIndex maps a topic name to its stable index (used for protocol IDs
-	// and log tagging).
-	topicIndex map[string]int
-
 	// events is the single ingress for the eventloop: readers, senders, timer
 	// drivers, and the verifier callback all post here; the eventloop is the
 	// sole consumer.
 	events chan event
 
-	// senders holds the per-(topic, peer) data sender (push stream). One
-	// in-flight data frame per topic peer; the eventloop hands work off and waits
+	// senders holds the per-peer data sender (push stream). One in-flight data
+	// frame per peer; the eventloop hands work off and waits
 	// for sendDoneEvent.
-	senders map[topicPeer]*peerSender
+	senders map[peer.ID]*peerSender
 
-	// bitmapWriters / controlWriters hold the per-(topic, peer) bitmap and
-	// control stream writers. These bypass the send budget (§F1) — advertisements
-	// and mesh management never block behind a data write.
-	bitmapWriters  map[topicPeer]*peerSender
-	controlWriters map[topicPeer]*peerSender
+	// bitmapWriters / controlWriters hold the per-peer bitmap and control stream
+	// writers. These bypass the send budget (§F1) — advertisements and mesh
+	// management never block behind a data write.
+	bitmapWriters  map[peer.ID]*peerSender
+	controlWriters map[peer.ID]*peerSender
 
-	// meshes track per-topic peer push/bitmap roles and prune backoff (§C).
-	meshes map[int]*meshState
+	// mesh tracks peer push/bitmap roles and prune backoff (§C).
+	mesh *meshState
 
-	// slots holds per-(topic, slot) state with the holder-count scarcity index
-	// (§E). Keyed topic name -> slot -> slotState.
-	slots map[string]map[int]*slotState
+	// slots holds per-slot state with the holder-count scarcity index (§E).
+	slots map[int]*slotState
 
 	// activeData counts in-flight data sends gated by the budget B. Push sends
 	// are exempt (§F1) but still tracked here for observability.
@@ -148,18 +144,12 @@ type Manager struct {
 	// streamsMu guards stream setup state, which is intentionally outside the
 	// eventloop because NewStream and inbound handlers run on libp2p goroutines.
 	streamsMu sync.Mutex
-	opening   map[topicPeer]struct{}
-	pending   map[topicPeer]*peerStreams
-}
-
-// topicPeer identifies one peer on one topic's stream set.
-type topicPeer struct {
-	topic int
-	peer  peer.ID
+	opening   map[peer.ID]struct{}
+	pending   map[peer.ID]*peerStreams
 }
 
 // New constructs an att_propagation Manager. The node layer wires in the host,
-// the shared verifier, a receive tracer, and the resolved Config.
+// this topic's verifier, a receive tracer, and the resolved Config.
 func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 	logger := cfg.Logger
 	if logger == nil {
@@ -168,14 +158,6 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 	if cfg.MaxMsgSize <= 0 {
 		cfg.MaxMsgSize = defaultMaxMsgSize
 	}
-	topicIndex := make(map[string]int, len(cfg.Topics))
-	for i, name := range cfg.Topics {
-		topicIndex[name] = i
-	}
-	meshes := make(map[int]*meshState, len(cfg.Topics))
-	for topicIdx := range cfg.Topics {
-		meshes[topicIdx] = newMeshState(cfg)
-	}
 	return &Manager{
 		host:           h,
 		verifier:       v,
@@ -183,38 +165,35 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 		cfg:            cfg,
 		logger:         logger,
 		self:           h.ID(),
-		topicIndex:     topicIndex,
 		events:         make(chan event, 256),
-		senders:        make(map[topicPeer]*peerSender),
-		bitmapWriters:  make(map[topicPeer]*peerSender),
-		controlWriters: make(map[topicPeer]*peerSender),
-		meshes:         meshes,
-		slots:          make(map[string]map[int]*slotState),
-		opening:        make(map[topicPeer]struct{}),
-		pending:        make(map[topicPeer]*peerStreams),
+		senders:        make(map[peer.ID]*peerSender),
+		bitmapWriters:  make(map[peer.ID]*peerSender),
+		controlWriters: make(map[peer.ID]*peerSender),
+		mesh:           newMeshState(cfg),
+		slots:          make(map[int]*slotState),
+		opening:        make(map[peer.ID]struct{}),
+		pending:        make(map[peer.ID]*peerStreams),
 	}
 }
 
 // markSendStreamsOpening claims the right to open the peer's bidirectional
 // stream set, returning false if another goroutine already claimed it. Cleared
 // by clearSendStreamsOpening on a failed open so a retry can proceed.
-func (m *Manager) markSendStreamsOpening(topicIdx int, p peer.ID) bool {
+func (m *Manager) markSendStreamsOpening(p peer.ID) bool {
 	m.streamsMu.Lock()
 	defer m.streamsMu.Unlock()
-	k := topicPeer{topic: topicIdx, peer: p}
-	if _, ok := m.opening[k]; ok {
+	if _, ok := m.opening[p]; ok {
 		return false
 	}
-	m.opening[k] = struct{}{}
+	m.opening[p] = struct{}{}
 	return true
 }
 
 // clearSendStreamsOpening releases stream setup state so a reconnect can retry.
-func (m *Manager) clearSendStreamsOpening(topicIdx int, p peer.ID) {
+func (m *Manager) clearSendStreamsOpening(p peer.ID) {
 	m.streamsMu.Lock()
-	k := topicPeer{topic: topicIdx, peer: p}
-	delete(m.opening, k)
-	delete(m.pending, k)
+	delete(m.opening, p)
+	delete(m.pending, p)
 	m.streamsMu.Unlock()
 }
 
@@ -250,30 +229,13 @@ func (m *Manager) Run(ctx context.Context) {
 // PublishLocal injects this mesh node's own attestation into local state as
 // validated. It posts a publishLocalEvent so the injection happens on the
 // eventloop goroutine, preserving single-owner discipline (§F4).
-func (m *Manager) PublishLocal(topic string, slot, pos int, sig, data []byte) {
-	m.post(publishLocalEvent{topic: topic, slot: slot, pos: pos, sig: sig, data: data})
+func (m *Manager) PublishLocal(slot, pos int, sig, data []byte) {
+	m.post(publishLocalEvent{slot: slot, pos: pos, sig: sig, data: data})
 }
 
 // FanoutPublish injects a fanout (originator) node's single attestation: opens
 // a push stream to each configured peer and sends one BatchedAttestation, then
 // resets any inbound stream (§G1). Implemented in fanout.go.
-func (m *Manager) FanoutPublish(topic string, slot, pos int, sig, data []byte) {
-	m.fanoutPublish(topic, slot, pos, sig, data)
-}
-
-// topicIdxOf resolves a topic name to its stable index, or -1 if unknown.
-func (m *Manager) topicIdxOf(topic string) int {
-	if i, ok := m.topicIndex[topic]; ok {
-		return i
-	}
-	return -1
-}
-
-func (m *Manager) mesh(topicIdx int) *meshState {
-	ms := m.meshes[topicIdx]
-	if ms == nil {
-		ms = newMeshState(m.cfg)
-		m.meshes[topicIdx] = ms
-	}
-	return ms
+func (m *Manager) FanoutPublish(slot, pos int, sig, data []byte) {
+	m.fanoutPublish(slot, pos, sig, data)
 }

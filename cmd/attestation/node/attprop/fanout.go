@@ -21,11 +21,9 @@ import (
 // call from both Run and fanoutPublish. A fanout node never receives.
 func (m *Manager) installFanoutResetHandlers() {
 	reset := func(s network.Stream) { m.fanoutResetInbound(s) }
-	for topicIdx := range m.cfg.Topics {
-		m.host.SetStreamHandler(PushProtocol(topicIdx), reset)
-		m.host.SetStreamHandler(BitmapProtocol(topicIdx), reset)
-		m.host.SetStreamHandler(ControlProtocol(topicIdx), reset)
-	}
+	m.host.SetStreamHandler(PushProtocol(m.cfg.TopicIndex), reset)
+	m.host.SetStreamHandler(BitmapProtocol(m.cfg.TopicIndex), reset)
+	m.host.SetStreamHandler(ControlProtocol(m.cfg.TopicIndex), reset)
 }
 
 // fanoutPublish opens a push stream to each peer the host is connected to and
@@ -34,7 +32,7 @@ func (m *Manager) installFanoutResetHandlers() {
 // reset handlers are (re)installed first so any inbound stream is rejected
 // (§G1). connectedPeers are the host's current peers — in the sim these are the
 // fanout node's configured mesh peers (fanout_node_mesh_peers).
-func (m *Manager) fanoutPublish(topic string, slot, pos int, sig, data []byte) {
+func (m *Manager) fanoutPublish(slot, pos int, sig, data []byte) {
 	m.installFanoutResetHandlers()
 
 	batch := &pb.BatchedAttestation{
@@ -50,14 +48,9 @@ func (m *Manager) fanoutPublish(topic string, slot, pos int, sig, data []byte) {
 		return
 	}
 
-	topicIdx := m.topicIdxOf(topic)
-	if topicIdx < 0 {
-		m.logger.Error("fanout publish unknown topic", "topic", topic)
-		return
-	}
 	digest := attDigestHex(data)
 	for _, p := range m.host.Network().Peers() {
-		s, err := m.host.NewStream(context.Background(), p, PushProtocol(topicIdx))
+		s, err := m.host.NewStream(context.Background(), p, PushProtocol(m.cfg.TopicIndex))
 		if err != nil {
 			m.logger.Debug("fanout open push stream", "peer", shortPeer(p), "err", err)
 			continue
@@ -71,7 +64,7 @@ func (m *Manager) fanoutPublish(topic string, slot, pos int, sig, data []byte) {
 		// frame; we never send more on this stream.
 		_ = s.CloseWrite()
 		m.logger.Info("partial_fanout_publish",
-			"topic", topicIdx,
+			"topic", m.cfg.TopicIndex,
 			"slot", slot,
 			"att_digest", digest,
 			"position", pos,

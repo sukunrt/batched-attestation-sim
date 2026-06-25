@@ -20,10 +20,10 @@ import (
 // budget, committee 64. Timer intervals are left zero so driveTimer is a no-op;
 // tests post tick/floor/heartbeat events by hand for determinism.
 func intgCfg(fanout bool) Config {
-	return intgCfgWithTopics(fanout, []string{"t0"})
+	return intgCfgForTopic(fanout, 0, "t0")
 }
 
-func intgCfgWithTopics(fanout bool, topics []string) Config {
+func intgCfgForTopic(fanout bool, topicIdx int, topic string) Config {
 	c := testCfg()
 	// Debug-level logger to a discard writer: keeps test output clean while still
 	// exercising every log call. Swap io.Discard for os.Stderr to debug.
@@ -32,7 +32,8 @@ func intgCfgWithTopics(fanout bool, topics []string) Config {
 		w = os.Stderr
 	}
 	c.Logger = slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	c.Topics = topics
+	c.Topic = topic
+	c.TopicIndex = topicIdx
 	c.CommitteeSize = testCommittee
 	c.SendBudgetB = 4
 	c.MaxAttsPerMessage = 30
@@ -69,7 +70,7 @@ func (f tracerFunc) OnPartialReceive(
 // harness pairs a simnet with the per-host managers under test.
 type harness struct {
 	sn       *simNet
-	managers []*Manager
+	managers [][]*Manager
 }
 
 // noFanout marks no host as a fanout node.
@@ -103,24 +104,29 @@ func newHarnessWithTopics(
 ) *harness {
 	t.Helper()
 	sn := newSimNet(t, count)
-	h := &harness{sn: sn, managers: make([]*Manager, count)}
+	h := &harness{sn: sn, managers: make([][]*Manager, count)}
 	for i := range count {
-		v := fastVerifier()
-		go v.Run()
-		t.Cleanup(v.Stop)
 		var tr Tracer
 		if tracers != nil {
 			tr = tracers[i]
 		}
-		m := New(sn.hosts[i], v, tr, intgCfgWithTopics(fanout(i), topics))
-		m.Start(ctx)
-		h.managers[i] = m
-		if !fanout(i) {
-			go m.run(ctx)
+		h.managers[i] = make([]*Manager, len(topics))
+		for topicIdx, topic := range topics {
+			v := fastVerifier()
+			go v.Run()
+			t.Cleanup(v.Stop)
+			m := New(sn.hosts[i], v, tr, intgCfgForTopic(fanout(i), topicIdx, topic))
+			m.Start(ctx)
+			h.managers[i][topicIdx] = m
+			if !fanout(i) {
+				go m.run(ctx)
+			}
 		}
 	}
 	return h
 }
+
+func (h *harness) manager(node, topicIdx int) *Manager { return h.managers[node][topicIdx] }
 
 // addr / connectUp mirror simNet but route through the harness's managers.
 func (h *harness) connectUp(t *testing.T, ctx context.Context, a, b int) {
@@ -128,7 +134,9 @@ func (h *harness) connectUp(t *testing.T, ctx context.Context, a, b int) {
 	require.NoError(t, h.sn.hosts[a].Connect(ctx, peer.AddrInfo{
 		ID: testPeerID(b), Addrs: []ma.Multiaddr{h.sn.addr(b)},
 	}))
-	h.managers[a].ConnectPeer(testPeerID(b))
+	for _, m := range h.managers[a] {
+		m.ConnectPeer(testPeerID(b))
+	}
 	synctest.Wait()
 }
 
@@ -140,12 +148,9 @@ func (m *Manager) onLoop(fn func()) {
 	<-done
 }
 
-func (m *Manager) forceTopicRole(topicIdx int, p peer.ID, r meshRole) {
-	m.onLoop(func() { m.mesh(topicIdx).roles[p] = r })
+func (m *Manager) forceRole(p peer.ID, r meshRole) {
+	m.onLoop(func() { m.mesh.roles[p] = r })
 }
-
-// forceRole sets a topic-0 peer's mesh role on the eventloop goroutine.
-func (m *Manager) forceRole(p peer.ID, r meshRole) { m.forceTopicRole(0, p, r) }
 
 // TestFanoutInjectAndReset exercises §G1: a fanout node injects its single
 // attestation to its connected peer (the mesh node receives + validates it), and
@@ -165,7 +170,7 @@ func TestFanoutInjectAndReset(t *testing.T) {
 		h := newHarness(t, ctx, 2, func(i int) bool { return i == fan },
 			map[int]Tracer{mesh: recv})
 		// Install the fanout reset handlers before any inbound stream arrives.
-		h.managers[fan].installFanoutResetHandlers()
+		h.manager(fan, 0).installFanoutResetHandlers()
 
 		// Live connection so the fanout publish path can open push streams to B.
 		require.NoError(t, h.sn.hosts[fan].Connect(ctx, peer.AddrInfo{
@@ -173,7 +178,7 @@ func TestFanoutInjectAndReset(t *testing.T) {
 		}))
 		synctest.Wait()
 
-		h.managers[fan].FanoutPublish("t0", 1, 7, []byte{0xab}, makeData(1))
+		h.manager(fan, 0).FanoutPublish(1, 7, []byte{0xab}, makeData(1))
 		synctest.Wait()
 		time.Sleep(100 * time.Millisecond) // frame traversal + verify
 		synctest.Wait()
@@ -211,15 +216,15 @@ func TestEndToEndPushForward(t *testing.T) {
 
 		// A (opener) ↔ B. Make A→B a push edge so A forwards data to B.
 		h.connectUp(t, ctx, opener, other)
-		h.managers[opener].forceRole(testPeerID(other), rolePush)
+		h.manager(opener, 0).forceRole(testPeerID(other), rolePush)
 
 		// A publishes positions; the tick flush ships the (partial) batch to B.
 		data := makeData(1)
 		for _, pos := range []int{3, 8, 21} {
-			h.managers[opener].PublishLocal("t0", 1, pos, []byte{byte(pos)}, data)
+			h.manager(opener, 0).PublishLocal(1, pos, []byte{byte(pos)}, data)
 		}
 		synctest.Wait()
-		h.managers[opener].post(tickEvent{})
+		h.manager(opener, 0).post(tickEvent{})
 		synctest.Wait()
 		time.Sleep(100 * time.Millisecond) // let the in-flight frame traverse + verify
 		synctest.Wait()
@@ -229,10 +234,10 @@ func TestEndToEndPushForward(t *testing.T) {
 
 		// After delivery, A must hold no in-flight send to B (Write returned,
 		// sendDone cleared it) and B is recorded as holding what we sent.
-		h.managers[opener].onLoop(func() {
-			k := topicPeer{topic: 0, peer: testPeerID(other)}
-			require.False(t, h.managers[opener].senders[k].inFlight)
-			ss := h.managers[opener].getSlotState("t0", 1)
+		h.manager(opener, 0).onLoop(func() {
+			k := testPeerID(other)
+			require.False(t, h.manager(opener, 0).senders[k].inFlight)
+			ss := h.manager(opener, 0).getSlotState(1)
 			b := ss.buckets[string(data)]
 			for _, pos := range []int{3, 8, 21} {
 				require.Equal(t, 1, b.holderCount[pos], "B recorded as holder")
@@ -260,19 +265,19 @@ func TestEndToEndSecondTopicForward(t *testing.T) {
 			[]string{"t0", "t1"})
 
 		h.connectUp(t, ctx, opener, other)
-		h.managers[opener].forceTopicRole(1, testPeerID(other), rolePush)
+		h.manager(opener, 1).forceRole(testPeerID(other), rolePush)
 
 		data := []byte("topic-one-slot-one")
-		h.managers[opener].PublishLocal("t1", 1, 11, []byte{0x11}, data)
+		h.manager(opener, 1).PublishLocal(1, 11, []byte{0x11}, data)
 		synctest.Wait()
-		h.managers[opener].post(tickEvent{})
+		h.manager(opener, 1).post(tickEvent{})
 		synctest.Wait()
 		time.Sleep(100 * time.Millisecond)
 		synctest.Wait()
 
 		require.Equal(t, []int{11}, got)
-		require.Equal(t, 1, h.managers[other].ValidatedCount("t1", 1))
-		require.Equal(t, 0, h.managers[other].ValidatedCount("t0", 1))
+		require.Equal(t, 1, h.manager(other, 1).ValidatedCount(1))
+		require.Equal(t, 0, h.manager(other, 0).ValidatedCount(1))
 	})
 }
 
@@ -289,13 +294,13 @@ func TestBitmapPlusKTrigger(t *testing.T) {
 		h.connectUp(t, ctx, opener, other)
 		// A treats B as a bitmap peer; B treats A as a bitmap peer (so B folds the
 		// inbound bitmap and we can read its peerAvail).
-		h.managers[opener].forceRole(testPeerID(other), roleBitmap)
-		h.managers[other].forceRole(testPeerID(opener), roleBitmap)
+		h.manager(opener, 0).forceRole(testPeerID(other), roleBitmap)
+		h.manager(other, 0).forceRole(testPeerID(opener), roleBitmap)
 
 		// Publish exactly K positions on A → crosses the +K threshold, emits.
 		data := makeData(1)
 		for pos := range bitmapTriggerK {
-			h.managers[opener].PublishLocal("t0", 1, pos, []byte{byte(pos)}, data)
+			h.manager(opener, 0).PublishLocal(1, pos, []byte{byte(pos)}, data)
 		}
 		synctest.Wait()
 		time.Sleep(100 * time.Millisecond) // bitmap frame traversal
@@ -303,8 +308,8 @@ func TestBitmapPlusKTrigger(t *testing.T) {
 
 		// B should now hold A's full bitmap for the bucket.
 		ones := 0
-		h.managers[other].onLoop(func() {
-			ss := h.managers[other].getSlotState("t0", 1)
+		h.manager(other, 0).onLoop(func() {
+			ss := h.manager(other, 0).getSlotState(1)
 			require.NotNil(t, ss, "B learned the slot from the bitmap")
 			b := ss.buckets[string(data)]
 			require.NotNil(t, b)
@@ -326,20 +331,20 @@ func TestBitmapFloorOnlyWhenChanged(t *testing.T) {
 		opener, other := orderedPair()
 		h := newHarness(t, ctx, 2, noFanout, nil)
 		h.connectUp(t, ctx, opener, other)
-		h.managers[opener].forceRole(testPeerID(other), roleBitmap)
-		h.managers[other].forceRole(testPeerID(opener), roleBitmap)
+		h.manager(opener, 0).forceRole(testPeerID(other), roleBitmap)
+		h.manager(other, 0).forceRole(testPeerID(opener), roleBitmap)
 
 		data := makeData(1)
-		h.managers[opener].PublishLocal("t0", 1, 5, []byte{5}, data) // < K, no +K emit
+		h.manager(opener, 0).PublishLocal(1, 5, []byte{5}, data) // < K, no +K emit
 		synctest.Wait()
 
 		// First floor: bitmap changed (one position) ⇒ emit; B learns position 5.
-		h.managers[opener].post(bitmapFloorEvent{})
+		h.manager(opener, 0).post(bitmapFloorEvent{})
 		synctest.Wait()
 		time.Sleep(100 * time.Millisecond) // bitmap frame traversal
 		synctest.Wait()
-		h.managers[other].onLoop(func() {
-			ss := h.managers[other].getSlotState("t0", 1)
+		h.manager(other, 0).onLoop(func() {
+			ss := h.manager(other, 0).getSlotState(1)
 			require.NotNil(t, ss)
 			require.True(t, ss.buckets[string(data)].peerAvail[testPeerID(opener)].Get(5))
 		})
@@ -347,13 +352,13 @@ func TestBitmapFloorOnlyWhenChanged(t *testing.T) {
 		// A second floor with no new validations must skip (re-emit only if
 		// changed): the sender marks the bucket unchanged — lastEmitted equals the
 		// current validated bitmap.
-		h.managers[opener].onLoop(func() {
-			ss := h.managers[opener].getSlotState("t0", 1)
+		h.manager(opener, 0).onLoop(func() {
+			ss := h.manager(opener, 0).getSlotState(1)
 			b := ss.buckets[string(data)]
 			require.NotNil(t, b.lastEmitted, "first floor recorded lastEmitted")
-			require.Equal(t, []byte(b.lastEmitted), []byte(h.managers[opener].validatedBitmap(b)))
+			require.Equal(t, []byte(b.lastEmitted), []byte(h.manager(opener, 0).validatedBitmap(b)))
 		})
-		h.managers[opener].post(bitmapFloorEvent{})
+		h.manager(opener, 0).post(bitmapFloorEvent{})
 		synctest.Wait() // no change is the assertion (no panic, bitmap unchanged)
 	})
 }

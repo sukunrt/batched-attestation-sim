@@ -31,15 +31,15 @@ func TestMeshForwardBidirectional(t *testing.T) {
 		synctest.Wait()
 
 		// Symmetric push mesh: each forwards data to the other.
-		h.managers[opener].forceRole(testPeerID(other), rolePush)
-		h.managers[other].forceRole(testPeerID(opener), rolePush)
+		h.manager(opener, 0).forceRole(testPeerID(other), rolePush)
+		h.manager(other, 0).forceRole(testPeerID(opener), rolePush)
 
 		data := makeData(1)
-		h.managers[opener].PublishLocal("t0", 1, 1, []byte{1}, data)
-		h.managers[other].PublishLocal("t0", 1, 2, []byte{2}, data)
+		h.manager(opener, 0).PublishLocal(1, 1, []byte{1}, data)
+		h.manager(other, 0).PublishLocal(1, 2, []byte{2}, data)
 		synctest.Wait()
-		h.managers[opener].post(tickEvent{})
-		h.managers[other].post(tickEvent{})
+		h.manager(opener, 0).post(tickEvent{})
+		h.manager(other, 0).post(tickEvent{})
 		synctest.Wait()
 
 		// If the bubble fails to quiesce here, this sleep never returns and the
@@ -47,9 +47,9 @@ func TestMeshForwardBidirectional(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		synctest.Wait()
 
-		require.Equal(t, 2, h.managers[opener].ValidatedCount("t0", 1),
+		require.Equal(t, 2, h.manager(opener, 0).ValidatedCount(1),
 			"opener validated both positions")
-		require.Equal(t, 2, h.managers[other].ValidatedCount("t0", 1),
+		require.Equal(t, 2, h.manager(other, 0).ValidatedCount(1),
 			"other validated both positions")
 	})
 }
