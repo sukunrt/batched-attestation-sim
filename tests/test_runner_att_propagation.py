@@ -77,6 +77,20 @@ def test_att_propagation_emits_flag_and_n():
     assert "-partial-priority" not in args
 
 
+def test_att_propagation_emits_zero_bitmap_d_values():
+    cfg = AttestationSimConfig(
+        topology=TopologyConfig(num_nodes=2),
+        att_propagation=True,
+        attprop_bitmap_dlow=0,
+        attprop_bitmap_d=0,
+        attprop_bitmap_dhigh=0,
+    )
+    args = _args(cfg, "node0")
+    assert "-attprop-bitmap-dlow=0" in args
+    assert "-attprop-bitmap-d=0" in args
+    assert "-attprop-bitmap-dhigh=0" in args
+
+
 def test_no_att_propagation_flag_when_off():
     cfg = AttestationSimConfig(topology=TopologyConfig(num_nodes=2))
     assert "-att-propagation" not in _args(cfg, "node0")
@@ -94,15 +108,22 @@ def test_tunables_survive_experiment_params_to_config():
 
 
 def test_mutual_exclusion_rejected():
-    for clash in ("use_partial_messages", "partial_priority"):
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            AttestationSimConfig(
-                topology=TopologyConfig(num_nodes=2),
-                att_propagation=True,
-                **{clash: True},
-            )
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            AttestationSimParams(att_propagation=True, **{clash: True})
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        AttestationSimConfig(
+            topology=TopologyConfig(num_nodes=2),
+            att_propagation=True,
+            use_partial_messages=True,
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        AttestationSimConfig(
+            topology=TopologyConfig(num_nodes=2),
+            att_propagation=True,
+            partial_priority=True,
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        AttestationSimParams(att_propagation=True, use_partial_messages=True)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        AttestationSimParams(att_propagation=True, partial_priority=True)
 
 
 def _experiment(params: AttestationSimParams):

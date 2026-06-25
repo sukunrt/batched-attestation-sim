@@ -190,13 +190,14 @@ att_propagation: true
 ```
 
 It is mutually exclusive with `use_partial_messages` and `partial_priority`; setting more than one
-is rejected. The per-message size cap reuses `max_attestations_per_message` (default 30). Every
-other tunable is optional — leave it unset (or 0) to take the protocol default:
+is rejected. The per-message size cap reuses `max_attestations_per_message` (default 30). Bitmap
+mesh sizes are literal, including `0`; configure them if you want bitmap peers. Other tunables use
+`0` to take the protocol default:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `attprop_push_dlow` / `attprop_push_d` / `attprop_push_dhigh` | 4 / 5 / 5 | push-mesh sizes (low = top-up trigger, D = high = hard cap) |
-| `attprop_bitmap_dlow` / `attprop_bitmap_d` / `attprop_bitmap_dhigh` | 14 / 16 / 16 | bitmap-mesh sizes |
+| `attprop_bitmap_dlow` / `attprop_bitmap_d` / `attprop_bitmap_dhigh` | 0 / 0 / 0 | bitmap-mesh sizes |
 | `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |
 | `attprop_max_peers_per_att` | 30 | initial holder-count index capacity |
 | `attprop_tick_interval_ms` | 20 | send tick |

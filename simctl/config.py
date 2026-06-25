@@ -137,8 +137,8 @@ class AttestationSimConfig(BaseModel):
     # att_propagation path: a native libp2p protocol (no gossipsub) with three
     # per-topic streams (push / bitmap / control). Mutually exclusive with
     # use_partial_messages and partial_priority. N reuses
-    # max_attestations_per_message. All tunables below are optional; 0 means the
-    # Go side applies the spec default.
+    # max_attestations_per_message. Bitmap D values are literal, including 0;
+    # other zero-valued tunables use the Go-side spec default.
     att_propagation: bool = False
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0
@@ -220,7 +220,8 @@ class AttestationSimParams(BaseModel):
     send_available_with_data: bool = False
 
     # att_propagation path; see AttestationSimConfig. N reuses
-    # max_attestations_per_message; all tunables optional (0 = Go spec default).
+    # max_attestations_per_message. Bitmap D values are literal, including 0;
+    # other zero-valued tunables use the Go-side spec default.
     att_propagation: bool = False
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0

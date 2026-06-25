@@ -218,7 +218,7 @@ libp2p protocol instead. Enable it with:
 ```yaml
 att_propagation: true
 max_attestations_per_message: 30   # optional, the per-message size cap N (reused from partial-priority)
-# all tunables below are optional; 0 ⇒ the Go side applies the spec default
+# bitmap D values are literal, including 0; other 0-valued tunables use the spec default
 attprop_push_dlow: 0
 attprop_push_d: 0
 attprop_push_dhigh: 0

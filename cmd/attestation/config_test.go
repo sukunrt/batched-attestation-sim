@@ -41,7 +41,7 @@ func TestAttPropConfigDefaults(t *testing.T) {
 	got := (&SimConfig{}).AttPropConfig()
 	want := node.AttPropParams{
 		PushDlow: 4, PushD: 5, PushDhigh: 5,
-		BitmapDlow: 14, BitmapD: 16, BitmapDhigh: 16,
+		BitmapDlow: 0, BitmapD: 0, BitmapDhigh: 0,
 		SendBudgetB: 4, MaxAttsPerMessage: node.MaxAttestationsPerMessage, MaxPeersPerAtt: 30,
 		TickInterval:        20 * time.Millisecond,
 		BitmapFloorInterval: 50 * time.Millisecond,
@@ -52,7 +52,7 @@ func TestAttPropConfigDefaults(t *testing.T) {
 		t.Fatalf("AttPropConfig() defaults = %+v, want %+v", got, want)
 	}
 
-	// Explicit overrides win.
+	// Explicit overrides win, including literal bitmap mesh sizes.
 	cfg := &SimConfig{
 		AttPropPushD: 7, AttPropBitmapD: 20, AttPropSendBudgetB: 2,
 		AttPropTickIntervalMs: 50, AttPropPruneBackoffSeconds: 30,

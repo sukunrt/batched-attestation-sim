@@ -48,12 +48,16 @@ func main() {
 		attPropPushDlow      = flag.Int("attprop-push-dlow", 0, "att_propagation push Dlow (0 = config/default)")
 		attPropPushD         = flag.Int("attprop-push-d", 0, "att_propagation push D (0 = config/default)")
 		attPropPushDhigh     = flag.Int("attprop-push-dhigh", 0, "att_propagation push Dhigh (0 = config/default)")
-		attPropBitmapDlow    = flag.Int("attprop-bitmap-dlow", 0, "att_propagation bitmap Dlow (0 = config/default)")
-		attPropBitmapD       = flag.Int("attprop-bitmap-d", 0, "att_propagation bitmap D (0 = config/default)")
-		attPropBitmapDhigh   = flag.Int("attprop-bitmap-dhigh", 0, "att_propagation bitmap Dhigh (0 = config/default)")
+		attPropBitmapDlow    = flag.Int("attprop-bitmap-dlow", 0, "att_propagation bitmap Dlow (0 allowed)")
+		attPropBitmapD       = flag.Int("attprop-bitmap-d", 0, "att_propagation bitmap D (0 allowed)")
+		attPropBitmapDhigh   = flag.Int("attprop-bitmap-dhigh", 0, "att_propagation bitmap Dhigh (0 allowed)")
 		gossipsubParams      = flag.String("gossipsub-params", "", "Per-node gossipsub mesh override, e.g. Dlow:8,D:12,Dhigh:16; empty uses the config value")
 	)
 	flag.Parse()
+	flagsSet := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		flagsSet[f.Name] = true
+	})
 
 	if *configFile == "" {
 		log.Fatal("-config-file is required")
@@ -80,9 +84,15 @@ func main() {
 	applyPositive(attPropPushDlow, &sim.AttPropPushDlow)
 	applyPositive(attPropPushD, &sim.AttPropPushD)
 	applyPositive(attPropPushDhigh, &sim.AttPropPushDhigh)
-	applyPositive(attPropBitmapDlow, &sim.AttPropBitmapDlow)
-	applyPositive(attPropBitmapD, &sim.AttPropBitmapD)
-	applyPositive(attPropBitmapDhigh, &sim.AttPropBitmapDhigh)
+	if flagsSet["attprop-bitmap-dlow"] {
+		sim.AttPropBitmapDlow = *attPropBitmapDlow
+	}
+	if flagsSet["attprop-bitmap-d"] {
+		sim.AttPropBitmapD = *attPropBitmapD
+	}
+	if flagsSet["attprop-bitmap-dhigh"] {
+		sim.AttPropBitmapDhigh = *attPropBitmapDhigh
+	}
 
 	publishSlots := make(map[int]struct{})
 	for _, s := range parseIntList(*publishSlotsStr) {

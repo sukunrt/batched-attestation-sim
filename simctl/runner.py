@@ -226,7 +226,7 @@ def generate_shadow_yaml(
                 ("attprop-bitmap-d", config.attprop_bitmap_d),
                 ("attprop-bitmap-dhigh", config.attprop_bitmap_dhigh),
             ):
-                if value > 0:
+                if flag.startswith("attprop-bitmap-") or value > 0:
                     args_parts.append(f"-{flag}={value}")
 
         node_memberships = memberships.get(node_num, [])

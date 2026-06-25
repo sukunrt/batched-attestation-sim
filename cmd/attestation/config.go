@@ -51,8 +51,8 @@ type SimConfig struct {
 
 	// att_propagation path: a native libp2p protocol (no gossipsub) with three
 	// persistent per-topic streams (push / bitmap / control). Mutually exclusive
-	// with use_partial_messages and partial_priority. The tunables below are
-	// optional; zero falls back to the spec defaults via the Effective* helpers.
+	// with use_partial_messages and partial_priority. Zero bitmap-mesh sizes are
+	// literal; the other zero-valued tunables fall back to spec defaults.
 	AttPropagation bool `yaml:"att_propagation"`
 
 	// §C1 push-mesh sizes (default 4/5/5: Dlow=top-up trigger, D=Dhigh=hard cap).
@@ -103,10 +103,11 @@ func (s *SimConfig) BandwidthLogFrequency() time.Duration {
 	return time.Duration(s.BandwidthLogFrequencyMs) * time.Millisecond
 }
 
-// AttPropConfig resolves the att_propagation tunables into a node.AttPropParams,
-// applying the spec defaults (§C1/§D2/§F) for any zero field. Only the values
-// are resolved here; the topic list / committee size / timing are filled by the
-// caller from the rest of the config.
+// AttPropConfig resolves the att_propagation tunables into a node.AttPropParams.
+// Bitmap mesh sizes are literal, including zero; the other zero-valued tunables
+// fall back to spec defaults (§C1/§D2/§F). Only the values are resolved here;
+// the topic list / committee size / timing are filled by the caller from the
+// rest of the config.
 func (s *SimConfig) AttPropConfig() node.AttPropParams {
 	pick := func(v, def int) int {
 		if v <= 0 {
@@ -121,9 +122,9 @@ func (s *SimConfig) AttPropConfig() node.AttPropParams {
 		PushDlow:            pick(s.AttPropPushDlow, 4),
 		PushD:               pick(s.AttPropPushD, 5),
 		PushDhigh:           pick(s.AttPropPushDhigh, 5),
-		BitmapDlow:          pick(s.AttPropBitmapDlow, 14),
-		BitmapD:             pick(s.AttPropBitmapD, 16),
-		BitmapDhigh:         pick(s.AttPropBitmapDhigh, 16),
+		BitmapDlow:          s.AttPropBitmapDlow,
+		BitmapD:             s.AttPropBitmapD,
+		BitmapDhigh:         s.AttPropBitmapDhigh,
 		SendBudgetB:         pick(s.AttPropSendBudgetB, 4),
 		MaxAttsPerMessage:   s.EffectiveMaxAttestationsPerMessage(),
 		MaxPeersPerAtt:      pick(s.AttPropMaxPeersPerAtt, 30),
