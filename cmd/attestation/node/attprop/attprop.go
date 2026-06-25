@@ -130,8 +130,9 @@ type Manager struct {
 
 	// bitmapWriters / controlWriters hold the per-peer bitmap and control stream
 	// writers. These bypass the send budget (§F1) — advertisements and mesh
-	// management never block behind a data write.
-	bitmapWriters  map[peer.ID]*peerSender
+	// management never block behind a data write. Bitmap writers replace stale
+	// queued advertisements instead of dropping the newest state.
+	bitmapWriters  map[peer.ID]*bitmapWriter
 	controlWriters map[peer.ID]*peerSender
 
 	// mesh tracks peer push/bitmap roles and prune backoff (§C).
@@ -175,7 +176,7 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 		self:           h.ID(),
 		events:         make(chan event, 256),
 		senders:        make(map[peer.ID]*peerSender),
-		bitmapWriters:  make(map[peer.ID]*peerSender),
+		bitmapWriters:  make(map[peer.ID]*bitmapWriter),
 		controlWriters: make(map[peer.ID]*peerSender),
 		mesh:           newMeshState(cfg),
 		slots:          make(map[int]*slotState),

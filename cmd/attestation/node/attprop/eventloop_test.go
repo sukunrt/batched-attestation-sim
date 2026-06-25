@@ -36,7 +36,7 @@ func schedManagerForTopic(
 		},
 		events:         make(chan event, 1024),
 		senders:        map[peer.ID]*peerSender{},
-		bitmapWriters:  map[peer.ID]*peerSender{},
+		bitmapWriters:  map[peer.ID]*bitmapWriter{},
 		controlWriters: map[peer.ID]*peerSender{},
 		mesh:           newMeshState(testCfg()),
 		slots:          map[int]*slotState{},

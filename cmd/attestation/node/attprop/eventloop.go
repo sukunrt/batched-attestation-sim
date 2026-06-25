@@ -14,8 +14,8 @@ import (
 )
 
 // writerBuf is the buffer depth for the budget-bypassing bitmap and control
-// writers. Deep enough that bursts (e.g. a full-bitmap dump across slots plus a
-// floor emit) rarely overflow; overflow drops idempotent frames via tryEnqueue.
+// writers. Bitmap overflow replaces stale queued advertisements; control
+// overflow drops idempotent mesh-management frames via tryEnqueue.
 const writerBuf = 32
 
 // event is the closed union consumed by the single eventloop goroutine
@@ -120,8 +120,8 @@ func (heartbeatEvent) isEvent()      {}
 // message to work (buffered size 1, so the eventloop never blocks on handoff);
 // the sender writes it via w.WriteMsg — which blocks under a full QUIC window,
 // the backpressure signal — then posts sendDoneEvent. inFlight (owned by the
-// eventloop) gates whether the peer can take another message. Bitmap and
-// control writers reuse this type but bypass the budget.
+// eventloop) gates whether the peer can take another message. Control writers
+// reuse this type but bypass the budget.
 type peerSender struct {
 	peer     peer.ID
 	stream   network.Stream
@@ -133,13 +133,13 @@ type peerSender struct {
 // newPeerSender wraps a stream's writer and launches the sender goroutine. The
 // goroutine drains one frame at a time: WriteMsg blocks on the QUIC window
 // (backpressure), then posts sendDone so the eventloop selects the next frame.
-// done lets the bitmap/control writers (which bypass the budget and never raise
+// done lets control writers (which bypass the budget and never raise
 // sendDoneEvent) skip the signal. The goroutine exits when work is closed.
 //
 // The data sender uses a size-1 channel with the inFlight flag for strict
-// one-in-flight flow control. Bitmap/control writers bypass the budget and never
-// signal back, so they use a deeper buffer and a non-blocking enqueue (see
-// tryEnqueue) — the eventloop must never block handing off (§F4).
+// one-in-flight flow control. Control writers bypass the budget and never signal
+// back, so they use a deeper buffer and a non-blocking enqueue (see tryEnqueue)
+// — the eventloop must never block handing off (§F4).
 func (m *Manager) newPeerSender(
 	p peer.ID,
 	s network.Stream,
@@ -177,9 +177,8 @@ func (s *peerSender) closeAndReset() {
 	}
 }
 
-// tryEnqueue hands a frame to a budget-bypassing writer (bitmap/control) without
-// blocking the eventloop: if the writer's buffer is full it drops the frame.
-// Safe because bitmap advertisements are idempotent (the floor re-emits) and
+// tryEnqueue hands a frame to a budget-bypassing control writer without blocking
+// the eventloop: if the writer's buffer is full it drops the frame. Safe because
 // graft/prune re-converges on the next heartbeat.
 func (m *Manager) tryEnqueue(s *peerSender, frame []byte, what string) {
 	select {
@@ -294,7 +293,7 @@ func (m *Manager) onPeerUp(e peerUpEvent) {
 	m.senders[e.peer] = m.newPeerSender(e.peer, e.push, 1, func() {
 		m.post(sendDoneEvent{peer: e.peer})
 	})
-	m.bitmapWriters[e.peer] = m.newPeerSender(e.peer, e.bitmap, writerBuf, nil)
+	m.bitmapWriters[e.peer] = m.newBitmapWriter(e.peer, e.bitmap, writerBuf)
 	m.controlWriters[e.peer] = m.newPeerSender(e.peer, e.control, writerBuf, nil)
 	m.mesh.roles[e.peer] = roleConnected
 	m.logger.Debug("peer_up", "topic", m.cfg.TopicIndex, "peer", shortPeer(e.peer))
@@ -385,12 +384,9 @@ func (m *Manager) sendFullBitmapTo(p peer.ID) {
 		if ctrl == nil {
 			continue
 		}
-		frame, err := proto.Marshal(ctrl)
-		if err != nil {
-			m.logger.Error("marshal full bitmap", "topic", m.cfg.TopicIndex, "err", err)
-			continue
+		for _, md := range ctrl.Metadatas {
+			m.enqueueBitmap(w, md, "bitmap_full")
 		}
-		m.tryEnqueue(w, frame, "bitmap_full")
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 
 	"github.com/libp2p/go-libp2p-pubsub/partialmessages/bitmap"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
 )
@@ -84,14 +83,11 @@ func (m *Manager) emitBitmaps(forced bool) {
 		if ctrl == nil {
 			continue
 		}
-		frame, err := proto.Marshal(ctrl)
-		if err != nil {
-			m.logger.Error("marshal bitmap envelope", "err", err)
-			continue
-		}
 		for _, p := range bitmapPeers {
 			if w, ok := m.bitmapWriters[p]; ok {
-				m.tryEnqueue(w, frame, "bitmap")
+				for _, md := range ctrl.Metadatas {
+					m.enqueueBitmap(w, md, "bitmap")
+				}
 			}
 		}
 		ss.validatedSinceEmit = 0
