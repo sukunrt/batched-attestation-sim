@@ -73,10 +73,10 @@ func (l *countLevel) remove(bucketKey string, pos int) bool {
 
 // bucket is the per-(topic, slot, attestation_data) state. Forks at the same
 // slot get independent buckets. atts holds the entries we possess; validating /
-// validated track verifier progress (only validated positions are forwardable,
-// count toward the +K bitmap trigger, and bump holder-count — §G2). holderCount
-// is the popcount over peers' available bit for each position (the scarcity
-// metric, §E1); peerAvail is each peer's advertised/inferred available bitmap.
+// validated track verifier progress (only validated positions are forwardable
+// and bump holder-count — §G2). holderCount is the popcount over peers'
+// available bit for each position (the scarcity metric, §E1); peerAvail is each
+// peer's advertised/inferred available bitmap.
 type bucket struct {
 	data       []byte
 	dataHash   []byte
@@ -102,10 +102,6 @@ type slotState struct {
 	committeeSize int // wire-level bitmap capacity, for sizing per-peer available
 	buckets       map[string]*bucket
 	levels        []countLevel
-
-	// validatedSinceEmit counts positions validated since the last bitmap
-	// advertisement for this slot; reaching bitmapTriggerK fires a +K emit (§D2).
-	validatedSinceEmit int
 }
 
 // newBucket initialises empty per-(topic, slot, hash(attestation_data)) state.

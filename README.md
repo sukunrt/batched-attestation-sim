@@ -208,7 +208,7 @@ mesh sizes are literal, including `0`; configure them if you want bitmap peers. 
 | `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |
 | `attprop_max_peers_per_att` | 30 | initial holder-count index capacity |
 | `attprop_tick_interval_ms` | 20 | send tick |
-| `attprop_bitmap_floor_interval_ms` | 50 | minimum spacing between bitmap advertisements |
+| `attprop_bitmap_floor_interval_ms` | 50 | bitmap advertisement interval |
 | `attprop_heartbeat_interval_ms` | 700 | mesh-maintenance heartbeat |
 | `attprop_prune_backoff_seconds` | 60 | backoff after a prune before re-grafting |
 

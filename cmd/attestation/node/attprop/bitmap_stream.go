@@ -9,14 +9,10 @@ import (
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
 )
 
-// bitmapTriggerK is the +K count trigger for a bitmap advertisement (§D2): once
-// this many positions validate for a slot since its last emit, re-advertise.
-const bitmapTriggerK = 30
-
 // bitmap_stream.go implements the bitmap advertisement stream (§D): full
-// available-only bitmaps per active bucket, triggered by a +K count change plus
-// a periodic floor (re-emit only if changed), sent to bitmap-mesh peers only and
-// bypassing the send budget.
+// available-only bitmaps per active bucket, triggered by the periodic floor
+// tick (re-emit only if changed), sent to bitmap-mesh peers only and bypassing
+// the send budget.
 
 // buildAvailableEnvelope assembles an available-only pb.ControlEnvelope (one
 // CommitteeAttestationPartsMetadata per bucket, available set from validated, no
@@ -66,17 +62,20 @@ func bucketKeys(ss *slotState) []string {
 	return bks
 }
 
-// emitBitmaps advertises the current available bitmap to every bitmap-mesh peer
-// for the slots that need it, bypassing the send budget (§D3). forced is the
-// floor tick: emit a bucket only if its validated bitmap changed since the last
-// emit (§D2). When not forced it is the +K trigger: emit slots whose
-// since-emit counter has reached K and reset that counter. Eventloop-only.
-func (m *Manager) emitBitmaps(forced bool) {
-	for slot, ss := range m.slots {
-		if !forced && ss.validatedSinceEmit < bitmapTriggerK {
-			continue
+// for the slots that changed since the last emit, bypassing the send budget
+// (§D3). Eventloop-only.
+func (m *Manager) emitBitmaps() {
+	peerCount := 0
+	for p := range m.bitmapWriters {
+		if m.mesh.role(p) == roleBitmap {
+			peerCount++
 		}
-		ctrl := m.changedAvailableEnvelope(ss, slot, forced)
+	}
+	if peerCount == 0 {
+		return
+	}
+	for slot, ss := range m.slots {
+		ctrl := m.changedAvailableEnvelope(ss, slot)
 		if ctrl == nil {
 			continue
 		}
@@ -88,21 +87,17 @@ func (m *Manager) emitBitmaps(forced bool) {
 			w.enqueueBitmaps(ctrl.Metadatas)
 			count++
 		}
-		ss.validatedSinceEmit = 0
 		m.logger.Debug("attprop_emit_bitmap",
 			"topic", m.cfg.TopicIndex,
-			"slot", slot, "buckets", len(ctrl.Metadatas), "forced", forced,
+			"slot", slot, "buckets", len(ctrl.Metadatas),
 			"peers", count)
 	}
 }
 
 // changedAvailableEnvelope builds the available envelope for a slot, recording
-// each bucket's emitted bitmap as lastEmitted. When onlyChanged (floor), buckets
-// whose bitmap is unchanged since lastEmitted are skipped; otherwise all
-// validated buckets are emitted (§D2). Returns nil when nothing would be sent.
-func (m *Manager) changedAvailableEnvelope(
-	ss *slotState, slot int, onlyChanged bool,
-) *pb.ControlEnvelope {
+// each bucket's emitted bitmap as lastEmitted. Buckets whose bitmap is unchanged
+// since lastEmitted are skipped. Returns nil when nothing would be sent.
+func (m *Manager) changedAvailableEnvelope(ss *slotState, slot int) *pb.ControlEnvelope {
 	ctrl := &pb.ControlEnvelope{}
 	for _, bk := range bucketKeys(ss) {
 		b := ss.buckets[bk]
@@ -110,7 +105,7 @@ func (m *Manager) changedAvailableEnvelope(
 			continue
 		}
 		avail := m.validatedBitmap(b)
-		if onlyChanged && b.lastEmitted != nil && slices.Equal(b.lastEmitted, avail) {
+		if b.lastEmitted != nil && slices.Equal(b.lastEmitted, avail) {
 			continue // floor: unchanged since last emit, skip (§D2)
 		}
 		b.lastEmitted = avail

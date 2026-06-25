@@ -146,7 +146,10 @@ func (h *harness) connectUp(t *testing.T, ctx context.Context, a, b int) {
 // so a test can safely force roles or read state without racing the loop.
 func (m *Manager) onLoop(fn func()) {
 	done := make(chan struct{})
-	m.post(funcEvent{fn: func() { fn(); close(done) }})
+	m.post(funcEvent{fn: func() {
+		defer close(done)
+		fn()
+	}})
 	<-done
 }
 
@@ -278,10 +281,10 @@ func TestEndToEndSecondTopicForward(t *testing.T) {
 	})
 }
 
-// TestBitmapPlusKTrigger proves §D2's +K trigger: a bitmap-mesh peer receives an
-// available advertisement once ≥ K positions validate on the sender, with the
-// correct number of set bits.
-func TestBitmapPlusKTrigger(t *testing.T) {
+// TestBitmapOnlyEmitsOnFloorTick proves that validations alone do not advertise
+// bitmaps; a bitmap-mesh peer receives the changed available bitmap only after
+// the periodic floor tick.
+func TestBitmapOnlyEmitsOnFloorTick(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
@@ -294,25 +297,46 @@ func TestBitmapPlusKTrigger(t *testing.T) {
 		h.manager(opener, 0).forceRole(testPeerID(other), roleBitmap)
 		h.manager(other, 0).forceRole(testPeerID(opener), roleBitmap)
 
-		// Publish exactly K positions on A → crosses the +K threshold, emits.
+		// Publish many positions on A. Validation count alone must not emit until
+		// the floor tick fires.
 		data := makeData(1)
-		for pos := range bitmapTriggerK {
+		const positions = 30
+		for pos := range positions {
 			h.manager(opener, 0).PublishLocal(1, pos, []byte{byte(pos)}, data)
 		}
 		synctest.Wait()
 		time.Sleep(100 * time.Millisecond) // bitmap frame traversal
 		synctest.Wait()
 
-		// B should now hold A's full bitmap for the bucket.
-		ones := 0
-		h.manager(other, 0).onLoop(func() {
-			ss := h.manager(other, 0).getSlotState(1)
-			require.NotNil(t, ss, "B learned the slot from the bitmap")
+		emittedBeforeFloor := false
+		h.manager(opener, 0).onLoop(func() {
+			ss := h.manager(opener, 0).getSlotState(1)
+			if ss == nil {
+				return
+			}
 			b := ss.buckets[string(hash(data))]
-			require.NotNil(t, b)
-			ones = b.peerAvail[testPeerID(opener)].OnesCount()
+			emittedBeforeFloor = b != nil && b.lastEmitted != nil
 		})
-		require.Equal(t, bitmapTriggerK, ones, "B holds A's advertised bitmap (+K)")
+		require.False(t, emittedBeforeFloor, "validation count alone must not emit a bitmap")
+
+		h.manager(opener, 0).post(bitmapFloorEvent{})
+		synctest.Wait()
+		time.Sleep(100 * time.Millisecond) // bitmap frame traversal
+		synctest.Wait()
+
+		// The floor tick should now record A's emitted bitmap for the bucket.
+		emittedAfterFloor := 0
+		h.manager(opener, 0).onLoop(func() {
+			ss := h.manager(opener, 0).getSlotState(1)
+			if ss == nil {
+				return
+			}
+			b := ss.buckets[string(hash(data))]
+			if b != nil && b.lastEmitted != nil {
+				emittedAfterFloor = b.lastEmitted.OnesCount()
+			}
+		})
+		require.Equal(t, positions, emittedAfterFloor, "floor tick emits A's changed bitmap")
 	})
 }
 
@@ -332,7 +356,7 @@ func TestBitmapFloorOnlyWhenChanged(t *testing.T) {
 		h.manager(other, 0).forceRole(testPeerID(opener), roleBitmap)
 
 		data := makeData(1)
-		h.manager(opener, 0).PublishLocal(1, 5, []byte{5}, data) // < K, no +K emit
+		h.manager(opener, 0).PublishLocal(1, 5, []byte{5}, data)
 		synctest.Wait()
 
 		// First floor: bitmap changed (one position) ⇒ emit; B learns position 5.

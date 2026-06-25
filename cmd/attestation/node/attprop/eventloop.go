@@ -300,7 +300,7 @@ func (m *Manager) dispatch(ev event) {
 	case tickEvent:
 		m.onTick()
 	case bitmapFloorEvent:
-		m.emitBitmaps(true)
+		m.emitBitmaps()
 	case heartbeatEvent:
 		m.onHeartbeat()
 	}
@@ -724,8 +724,8 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 
 // onValidated promotes verifier-validated positions to forwardable: move them
 // validating→validated, insert into the scarcity index at their current
-// holder-count, bump the +K bitmap-trigger counter, and emit the validated log
-// (§G2/§H2). trySelectAndSend re-runs after (newly forwardable positions).
+// holder-count, and emit the validated log (§G2/§H2). trySelectAndSend re-runs
+// after (newly forwardable positions).
 func (m *Manager) onValidated(e validatedEvent) {
 	if !m.acceptsSlot(e.slot) {
 		return
@@ -747,9 +747,7 @@ func (m *Manager) onValidated(e validatedEvent) {
 		}
 		delete(b.validating, pe.Position)
 		b.validated[pe.Position] = struct{}{}
-
 		ss.indexAddValidated(string(b.dataHash), pe.Position, b.holderCount[pe.Position])
-		ss.validatedSinceEmit++
 		m.logger.Info("attestation_validated",
 			"slot", e.slot,
 			"topic", m.cfg.TopicIndex,
@@ -757,16 +755,6 @@ func (m *Manager) onValidated(e validatedEvent) {
 			"position", pe.Position,
 			"latency_ms", latencyMs,
 		)
-	}
-	m.maybeEmitBitmap(ss)
-}
-
-// maybeEmitBitmap fires a +K bitmap advertisement once enough positions have
-// validated for the slot since its last emit (§D2). Called from every path that
-// validates positions (received-then-verified, and self-published).
-func (m *Manager) maybeEmitBitmap(ss *slotState) {
-	if ss.validatedSinceEmit >= bitmapTriggerK {
-		m.emitBitmaps(false)
 	}
 }
 
@@ -786,14 +774,12 @@ func (m *Manager) onPublishLocal(e publishLocalEvent) {
 	b.atts[e.pos] = &attEntry{Position: e.pos, Signature: e.sig, Data: b.data}
 	b.validated[e.pos] = struct{}{}
 	ss.indexAddValidated(string(b.dataHash), e.pos, b.holderCount[e.pos])
-	ss.validatedSinceEmit++
 	m.logger.Info("self_published",
 		"slot", e.slot,
 		"topic", m.cfg.TopicIndex,
 		"att_digest", attDigestHex(e.data),
 		"position", e.pos,
 	)
-	m.maybeEmitBitmap(ss)
 }
 
 // getOrCreateSlotState returns (creating as needed) the per-slot state.
