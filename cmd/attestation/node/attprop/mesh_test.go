@@ -17,9 +17,16 @@ import (
 func testCfg() Config {
 	return Config{
 		PushDlow: 4, PushD: 5, PushDhigh: 5,
-		BitmapLow: 14, BitmapTarget: 16, BitmapHigh: 16,
+		BitmapDlow: 14, BitmapD: 16, BitmapDhigh: 16,
 		PruneBackoff: 60 * time.Second,
 	}
+}
+
+func testCfgWithSlack() Config {
+	c := testCfg()
+	c.PushDhigh = 7
+	c.BitmapDhigh = 18
+	return c
 }
 
 // pid builds a deterministic test peer ID. Lower index sorts first, matching
@@ -118,7 +125,8 @@ func TestOnGraftBitmap(t *testing.T) {
 }
 
 // TestOnPruneArmsBackoff verifies prune drops to connected and arms the right
-// backoff, and that a graft inside the backoff window is rejected.
+// outbound backoff. Inbound grafts ignore that local backoff and are admitted by
+// normal capacity checks.
 func TestOnPruneArmsBackoff(t *testing.T) {
 	now := time.Unix(1000, 0)
 
@@ -131,13 +139,8 @@ func TestOnPruneArmsBackoff(t *testing.T) {
 		assert.True(t, ms.inPushBackoff(p, now))
 		assert.False(t, ms.inBitmapBackoff(p, now))
 
-		// Graft during backoff ⇒ rejected with Prune:Push.
+		// Graft during backoff is still accepted if we have room.
 		reply := ms.onGraft(p, pb.AttPropMesh_PUSH, now.Add(30*time.Second))
-		assert.Equal(t, []string{"PRUNE:PUSH"}, ops(reply))
-		assert.Equal(t, roleConnected, ms.role(p))
-
-		// After the window, a graft is accepted again.
-		reply = ms.onGraft(p, pb.AttPropMesh_PUSH, now.Add(61*time.Second))
 		assert.Nil(t, reply)
 		assert.Equal(t, rolePush, ms.role(p))
 	})
@@ -152,8 +155,8 @@ func TestOnPruneArmsBackoff(t *testing.T) {
 		assert.False(t, ms.inPushBackoff(p, now))
 
 		reply := ms.onGraft(p, pb.AttPropMesh_BITMAP, now.Add(30*time.Second))
-		assert.Equal(t, []string{"PRUNE:BITMAP"}, ops(reply))
-		assert.Equal(t, roleConnected, ms.role(p))
+		assert.Nil(t, reply)
+		assert.Equal(t, roleBitmap, ms.role(p))
 	})
 
 	t.Run("prune full arms both backoffs", func(t *testing.T) {
@@ -165,17 +168,16 @@ func TestOnPruneArmsBackoff(t *testing.T) {
 		assert.True(t, ms.inPushBackoff(p, now))
 		assert.True(t, ms.inBitmapBackoff(p, now))
 
-		// Both a push and a bitmap graft are rejected during the window.
-		assert.Equal(t, []string{"PRUNE:PUSH"},
-			ops(ms.onGraft(p, pb.AttPropMesh_PUSH, now.Add(time.Second))))
-		assert.Equal(t, []string{"PRUNE:BITMAP"},
-			ops(ms.onGraft(p, pb.AttPropMesh_BITMAP, now.Add(time.Second))))
+		// Both push and bitmap grafts can still be accepted during the window.
+		assert.Nil(t, ms.onGraft(p, pb.AttPropMesh_PUSH, now.Add(time.Second)))
+		ms.roles[p] = roleConnected
+		assert.Nil(t, ms.onGraft(p, pb.AttPropMesh_BITMAP, now.Add(time.Second)))
 	})
 }
 
-// TestOnGraftPushRedirectRespectsBitmapBackoff: a push-full graft from a peer in
-// bitmap backoff cannot be redirected into bitmap, so it gets Prune:Full.
-func TestOnGraftPushRedirectRespectsBitmapBackoff(t *testing.T) {
+// TestOnGraftPushRedirectIgnoresBitmapBackoff: inbound graft handling ignores
+// local bitmap backoff and redirects when bitmap has room.
+func TestOnGraftPushRedirectIgnoresBitmapBackoff(t *testing.T) {
 	now := time.Unix(1000, 0)
 	ms := newMeshState(testCfg())
 	for i := range 5 {
@@ -184,8 +186,42 @@ func TestOnGraftPushRedirectRespectsBitmapBackoff(t *testing.T) {
 	p := pid(1)
 	ms.bitmapBackoff[p] = now.Add(30 * time.Second)
 	reply := ms.onGraft(p, pb.AttPropMesh_PUSH, now)
-	assert.Equal(t, []string{"PRUNE:FULL"}, ops(reply))
-	assert.Equal(t, roleConnected, ms.role(p))
+	assert.Equal(t, []string{"PRUNE:PUSH", "GRAFT:BITMAP"}, ops(reply))
+	assert.Equal(t, roleBitmap, ms.role(p))
+}
+
+func TestOnGraftUsesDhighSlack(t *testing.T) {
+	now := time.Unix(1000, 0)
+
+	t.Run("push admits up to Dhigh", func(t *testing.T) {
+		ms := newMeshState(testCfgWithSlack())
+		for i := range ms.cfg.PushD {
+			seedRole(ms, pid(100+i), rolePush)
+		}
+		for i := range ms.cfg.PushDhigh - ms.cfg.PushD {
+			reply := ms.onGraft(pid(i), pb.AttPropMesh_PUSH, now)
+			require.Nil(t, reply)
+			require.Equal(t, rolePush, ms.role(pid(i)))
+		}
+		reply := ms.onGraft(pid(99), pb.AttPropMesh_PUSH, now)
+		require.Equal(t, []string{"PRUNE:PUSH", "GRAFT:BITMAP"}, ops(reply))
+		require.Equal(t, roleBitmap, ms.role(pid(99)))
+	})
+
+	t.Run("bitmap admits up to Dhigh", func(t *testing.T) {
+		ms := newMeshState(testCfgWithSlack())
+		for i := range ms.cfg.BitmapD {
+			seedRole(ms, pid(100+i), roleBitmap)
+		}
+		for i := range ms.cfg.BitmapDhigh - ms.cfg.BitmapD {
+			reply := ms.onGraft(pid(i), pb.AttPropMesh_BITMAP, now)
+			require.Nil(t, reply)
+			require.Equal(t, roleBitmap, ms.role(pid(i)))
+		}
+		reply := ms.onGraft(pid(99), pb.AttPropMesh_BITMAP, now)
+		require.Equal(t, []string{"PRUNE:BITMAP"}, ops(reply))
+		require.Equal(t, roleConnected, ms.role(pid(99)))
+	})
 }
 
 // TestHeartbeatTopUpPrefersFreshConnected: push below Dlow tops up to PushD using
@@ -251,14 +287,14 @@ func TestHeartbeatPromotesBitmapFallback(t *testing.T) {
 		assert.Equal(t, rolePush, ms.role(p))
 		assert.Equal(t, []string{"GRAFT:PUSH"}, ops(grafts[p]))
 	}
-	// Promotion vacated 2 bitmap slots (16 ⇒ 14). 14 is exactly BitmapLow, not
+	// Promotion vacated 2 bitmap slots (16 ⇒ 14). 14 is exactly BitmapDlow, not
 	// below it, so bitmap top-up does not re-trigger and it stays at 14 — no
 	// refill churn, and never over target.
 	_, bmap := ms.counts()
 	assert.Equal(t, 14, bmap)
 }
 
-// TestHeartbeatGrowsBitmap: bitmap below BitmapLow grows toward BitmapTarget with
+// TestHeartbeatGrowsBitmap: bitmap below BitmapDlow grows toward BitmapD with
 // fresh connected peers.
 func TestHeartbeatGrowsBitmap(t *testing.T) {
 	now := time.Unix(1000, 0)
@@ -301,7 +337,7 @@ func TestHeartbeatTrimsExcess(t *testing.T) {
 	for i := range 7 { // push=7 (> PushD=5)
 		seedRole(ms, pid(i), rolePush)
 	}
-	for i := range 18 { // bitmap=18 (> BitmapTarget=16)
+	for i := range 18 { // bitmap=18 (> BitmapD=16)
 		seedRole(ms, pid(100+i), roleBitmap)
 	}
 	var candidates []peer.ID
@@ -331,6 +367,32 @@ func TestHeartbeatTrimsExcess(t *testing.T) {
 	}
 }
 
+func TestHeartbeatTrimsOnlyAboveDhigh(t *testing.T) {
+	now := time.Unix(1000, 0)
+	ms := newMeshState(testCfgWithSlack())
+
+	for i := range 8 { // push=8 (> PushDhigh=7)
+		seedRole(ms, pid(i), rolePush)
+	}
+	for i := range 19 { // bitmap=19 (> BitmapDhigh=18)
+		seedRole(ms, pid(100+i), roleBitmap)
+	}
+	var candidates []peer.ID
+	for i := range 8 {
+		candidates = append(candidates, pid(i))
+	}
+	for i := range 19 {
+		candidates = append(candidates, pid(100+i))
+	}
+
+	grafts, prunes := ms.heartbeat(now, candidates)
+	assert.Empty(t, grafts)
+	push, bmap := ms.counts()
+	assert.Equal(t, ms.cfg.PushDhigh, push)
+	assert.Equal(t, ms.cfg.BitmapDhigh, bmap)
+	assert.Len(t, prunes, 2)
+}
+
 // TestHeartbeatRespectsBackoff: a peer in backoff is skipped during top-up and a
 // fresh peer is grafted in its place. pid(0) is backed off for both meshes so it
 // stays connected; pid(1) is fresh and should be grafted to push.
@@ -355,7 +417,7 @@ func TestHeartbeatRespectsBackoff(t *testing.T) {
 }
 
 // TestHeartbeatConvergence: from a degree-~30 all-connected candidate set,
-// repeated heartbeats converge to push≈PushD / bitmap≈BitmapTarget and never
+// repeated heartbeats converge to push≈PushD / bitmap≈BitmapD and never
 // violate mutual exclusion (a peer is never both push and bitmap).
 func TestHeartbeatConvergence(t *testing.T) {
 	now := time.Unix(1000, 0)
@@ -375,12 +437,12 @@ func TestHeartbeatConvergence(t *testing.T) {
 		// assert the counts are consistent and no peer is double-counted).
 		push, bmap := ms.counts()
 		assert.LessOrEqual(t, push, ms.cfg.PushD, "round %d push over cap", round)
-		assert.LessOrEqual(t, bmap, ms.cfg.BitmapTarget, "round %d bitmap over cap", round)
+		assert.LessOrEqual(t, bmap, ms.cfg.BitmapD, "round %d bitmap over cap", round)
 	}
 
 	push, bmap := ms.counts()
 	assert.Equal(t, ms.cfg.PushD, push, "converged push")
-	assert.Equal(t, ms.cfg.BitmapTarget, bmap, "converged bitmap")
+	assert.Equal(t, ms.cfg.BitmapD, bmap, "converged bitmap")
 
 	// Verify mutual exclusion explicitly: tally roles, ensure each peer has one.
 	seen := map[meshRole]int{}
@@ -388,6 +450,6 @@ func TestHeartbeatConvergence(t *testing.T) {
 		seen[ms.role(p)]++
 	}
 	assert.Equal(t, ms.cfg.PushD, seen[rolePush])
-	assert.Equal(t, ms.cfg.BitmapTarget, seen[roleBitmap])
-	assert.Equal(t, degree-ms.cfg.PushD-ms.cfg.BitmapTarget, seen[roleConnected])
+	assert.Equal(t, ms.cfg.BitmapD, seen[roleBitmap])
+	assert.Equal(t, degree-ms.cfg.PushD-ms.cfg.BitmapD, seen[roleConnected])
 }

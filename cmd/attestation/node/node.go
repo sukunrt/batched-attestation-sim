@@ -116,6 +116,7 @@ type Node struct {
 	partial         *partialAttestationManager
 	partialPriority *priorityAttestationManager
 	attProp         map[string]*attprop.Manager
+	attPropPeers    []peer.ID
 }
 
 // AttPropParams are the att_propagation mesh/send tunables (spec §C1/§D2/§F),
@@ -123,7 +124,7 @@ type Node struct {
 // Start. Kept as a Node-level struct so the construction literal stays compact.
 type AttPropParams struct {
 	PushDlow, PushD, PushDhigh                                         int
-	BitmapLow, BitmapTarget, BitmapHigh                                int
+	BitmapDlow, BitmapD, BitmapDhigh                                   int
 	SendBudgetB, MaxAttsPerMessage, MaxPeersPerAtt                     int
 	TickInterval, BitmapFloorInterval, HeartbeatInterval, PruneBackoff time.Duration
 }
@@ -276,9 +277,9 @@ func (n *Node) startAttProp(ctx context.Context) {
 			PushDlow:            p.PushDlow,
 			PushD:               p.PushD,
 			PushDhigh:           p.PushDhigh,
-			BitmapLow:           p.BitmapLow,
-			BitmapTarget:        p.BitmapTarget,
-			BitmapHigh:          p.BitmapHigh,
+			BitmapDlow:          p.BitmapDlow,
+			BitmapD:             p.BitmapD,
+			BitmapDhigh:         p.BitmapDhigh,
 			SendBudgetB:         p.SendBudgetB,
 			MaxAttsPerMessage:   p.MaxAttsPerMessage,
 			MaxPeersPerAtt:      p.MaxPeersPerAtt,
@@ -316,9 +317,16 @@ type noopAttPropTracer struct{}
 func (noopAttPropTracer) OnPartialReceive(_, _, _ int, _ []byte, _ int64) {}
 
 func (n *Node) JoinTopics() {
-	// att_propagation has no gossipsub topics; the native protocol's streams are
-	// already up from Start/ConnectToPeers.
 	if n.AttPropagation {
+		// Opening attprop streams is equivalent to joining the topic: handlers were
+		// installed in Start, but outbound streams wait for the startup jitter.
+		if !n.Fanout {
+			for _, peerID := range n.attPropPeers {
+				for _, m := range n.attProp {
+					m.ConnectPeer(peerID)
+				}
+			}
+		}
 		return
 	}
 	joinOne := func(name string, subscribe bool) {
@@ -366,6 +374,8 @@ func (n *Node) JoinTopics() {
 func (n *Node) ConnectToPeers(peers []int) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var attPropPeers []peer.ID
 	semaCh := make(chan struct{}, 20)
 	for _, peerNum := range peers {
 		if peerNum <= n.Num {
@@ -388,15 +398,16 @@ func (n *Node) ConnectToPeers(peers []int) {
 			}
 			n.logger.Info("connected", "peer", peerNum)
 			if n.AttPropagation {
-				// The connecting side opens one bidirectional stream per message type;
-				// the peer uses those same streams through its inbound handlers.
-				for _, m := range n.attProp {
-					m.ConnectPeer(peerID)
-				}
+				mu.Lock()
+				attPropPeers = append(attPropPeers, peerID)
+				mu.Unlock()
 			}
 		})
 	}
 	wg.Wait()
+	if n.AttPropagation {
+		n.attPropPeers = append(n.attPropPeers, attPropPeers...)
+	}
 }
 
 // Run reads from the topic and logs messages received.

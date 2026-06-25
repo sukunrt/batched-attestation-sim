@@ -17,7 +17,7 @@ import (
 func smallAttPropParams() AttPropParams {
 	p := attPropParams()
 	p.PushDlow, p.PushD, p.PushDhigh = 2, 3, 3
-	p.BitmapLow, p.BitmapTarget, p.BitmapHigh = 3, 4, 4
+	p.BitmapDlow, p.BitmapD, p.BitmapDhigh = 3, 4, 4
 	p.MaxPeersPerAtt = 8
 	return p
 }

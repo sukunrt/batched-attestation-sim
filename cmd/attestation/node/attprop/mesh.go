@@ -97,17 +97,15 @@ func (ms *meshState) onGraft(
 	push, bitmap := ms.counts()
 	switch mesh {
 	case pb.AttPropMesh_PUSH:
-		// Reject a push graft while the peer is in push backoff (§C7).
-		if ms.inPushBackoff(p, now) {
-			return []*pb.AttPropControlItem{pruneItem(pb.AttPropMesh_PUSH)}
-		}
-		if push < ms.cfg.PushD {
+		// Backoff is sender-local: it suppresses our outbound graft attempts but
+		// does not reject a peer that independently grafts us.
+		if push < ms.cfg.PushDhigh {
 			ms.roles[p] = rolePush
 			return nil
 		}
-		// Push full: redirect to bitmap if there is room and no bitmap backoff
-		// (§C4). Otherwise reject both meshes with Prune:Full.
-		if bitmap < ms.cfg.BitmapTarget && !ms.inBitmapBackoff(p, now) {
+		// Push full: redirect to bitmap if there is room (§C4). Otherwise reject
+		// both meshes with Prune:Full.
+		if bitmap < ms.cfg.BitmapDhigh {
 			ms.roles[p] = roleBitmap
 			return []*pb.AttPropControlItem{
 				pruneItem(pb.AttPropMesh_PUSH),
@@ -117,10 +115,7 @@ func (ms *meshState) onGraft(
 		return []*pb.AttPropControlItem{pruneItem(pb.AttPropMesh_FULL)}
 
 	case pb.AttPropMesh_BITMAP:
-		if ms.inBitmapBackoff(p, now) {
-			return []*pb.AttPropControlItem{pruneItem(pb.AttPropMesh_BITMAP)}
-		}
-		if bitmap < ms.cfg.BitmapTarget {
+		if bitmap < ms.cfg.BitmapDhigh {
 			ms.roles[p] = roleBitmap
 			return nil
 		}
@@ -156,7 +151,7 @@ func (ms *meshState) onPrune(p peer.ID, mesh pb.AttPropMesh, now time.Time) {
 // heartbeat runs periodic mesh maintenance (§C2/§C5/§C6) over the connected-peer
 // candidate set: top up push toward PushD (preferring fresh connected peers,
 // promoting a bitmap peer only as a fallback), prune push excess, top up bitmap
-// toward BitmapTarget, then prune bitmap excess. All grafts respect backoff and
+// toward BitmapD, then prune bitmap excess. All grafts respect backoff and
 // the two meshes stay mutually exclusive. It returns the graft and prune control
 // items to send per peer; the eventloop sends them.
 func (ms *meshState) heartbeat(
@@ -203,8 +198,9 @@ func (ms *meshState) heartbeat(
 		}
 	}
 
-	// Push trim: prune excess above PushD.
-	for push > ms.cfg.PushD {
+	// Push trim: prune excess above PushDhigh. Heartbeat fills to D; inbound grafts
+	// may occupy slack up to Dhigh.
+	for push > ms.cfg.PushDhigh {
 		p, ok := ms.pickOne(sorted, rolePush)
 		if !ok {
 			break
@@ -215,11 +211,11 @@ func (ms *meshState) heartbeat(
 		push--
 	}
 
-	// Bitmap top-up: BitmapLow is the trigger, BitmapTarget the fill target.
+	// Bitmap top-up: BitmapDlow is the trigger, BitmapD the fill target.
 	// Fresh connected peers only (not in bitmap backoff); bitmap never promotes
 	// from push — push is the scarcer mesh.
-	if bitmap < ms.cfg.BitmapLow {
-		for bitmap < ms.cfg.BitmapTarget {
+	if bitmap < ms.cfg.BitmapDlow {
+		for bitmap < ms.cfg.BitmapD {
 			p, ok := ms.pickFreshConnectedBitmap(sorted, now)
 			if !ok {
 				break
@@ -230,8 +226,9 @@ func (ms *meshState) heartbeat(
 		}
 	}
 
-	// Bitmap trim: prune excess above target.
-	for bitmap > ms.cfg.BitmapTarget {
+	// Bitmap trim: prune excess above BitmapDhigh. Heartbeat fills to D; inbound
+	// grafts may occupy slack up to Dhigh.
+	for bitmap > ms.cfg.BitmapDhigh {
 		p, ok := ms.pickOne(sorted, roleBitmap)
 		if !ok {
 			break

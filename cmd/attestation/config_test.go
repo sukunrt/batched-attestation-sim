@@ -41,7 +41,7 @@ func TestAttPropConfigDefaults(t *testing.T) {
 	got := (&SimConfig{}).AttPropConfig()
 	want := node.AttPropParams{
 		PushDlow: 4, PushD: 5, PushDhigh: 5,
-		BitmapLow: 14, BitmapTarget: 16, BitmapHigh: 16,
+		BitmapDlow: 14, BitmapD: 16, BitmapDhigh: 16,
 		SendBudgetB: 4, MaxAttsPerMessage: node.MaxAttestationsPerMessage, MaxPeersPerAtt: 30,
 		TickInterval:        20 * time.Millisecond,
 		BitmapFloorInterval: 100 * time.Millisecond,
@@ -54,12 +54,12 @@ func TestAttPropConfigDefaults(t *testing.T) {
 
 	// Explicit overrides win.
 	cfg := &SimConfig{
-		AttPropPushD: 7, AttPropBitmapTarget: 20, AttPropSendBudgetB: 2,
+		AttPropPushD: 7, AttPropBitmapD: 20, AttPropSendBudgetB: 2,
 		AttPropTickIntervalMs: 50, AttPropPruneBackoffSeconds: 30,
 		MaxAttestationsPerMessage: 12,
 	}
 	o := cfg.AttPropConfig()
-	if o.PushD != 7 || o.BitmapTarget != 20 || o.SendBudgetB != 2 ||
+	if o.PushD != 7 || o.BitmapD != 20 || o.SendBudgetB != 2 ||
 		o.TickInterval != 50*time.Millisecond || o.PruneBackoff != 30*time.Second ||
 		o.MaxAttsPerMessage != 12 {
 		t.Fatalf("AttPropConfig() overrides not applied: %+v", o)

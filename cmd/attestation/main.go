@@ -27,6 +27,7 @@ import (
 )
 
 const listenPort = 8000
+const minJoinDelay = 5 * time.Second
 
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
@@ -44,6 +45,12 @@ func main() {
 		maxAttsPerMessage    = flag.Int("max-attestations-per-message", 0, "Max attestations per outgoing partial-priority/att-propagation data message (0 = default)")
 		sendAvailWithData    = flag.Bool("send-available-with-data", false, "Piggyback our validated bitmap onto the first data message to each mesh peer per tick (partial-priority only)")
 		attPropagation       = flag.Bool("att-propagation", false, "Use the att_propagation native protocol (no gossipsub; mutually exclusive with partial modes)")
+		attPropPushDlow      = flag.Int("attprop-push-dlow", 0, "att_propagation push Dlow (0 = config/default)")
+		attPropPushD         = flag.Int("attprop-push-d", 0, "att_propagation push D (0 = config/default)")
+		attPropPushDhigh     = flag.Int("attprop-push-dhigh", 0, "att_propagation push Dhigh (0 = config/default)")
+		attPropBitmapDlow    = flag.Int("attprop-bitmap-dlow", 0, "att_propagation bitmap Dlow (0 = config/default)")
+		attPropBitmapD       = flag.Int("attprop-bitmap-d", 0, "att_propagation bitmap D (0 = config/default)")
+		attPropBitmapDhigh   = flag.Int("attprop-bitmap-dhigh", 0, "att_propagation bitmap Dhigh (0 = config/default)")
 		gossipsubParams      = flag.String("gossipsub-params", "", "Per-node gossipsub mesh override, e.g. Dlow:8,D:12,Dhigh:16; empty uses the config value")
 	)
 	flag.Parse()
@@ -65,6 +72,17 @@ func main() {
 	if *maxAttsPerMessage > 0 {
 		sim.MaxAttestationsPerMessage = *maxAttsPerMessage
 	}
+	applyPositive := func(flagVal *int, dst *int) {
+		if *flagVal > 0 {
+			*dst = *flagVal
+		}
+	}
+	applyPositive(attPropPushDlow, &sim.AttPropPushDlow)
+	applyPositive(attPropPushD, &sim.AttPropPushD)
+	applyPositive(attPropPushDhigh, &sim.AttPropPushDhigh)
+	applyPositive(attPropBitmapDlow, &sim.AttPropBitmapDlow)
+	applyPositive(attPropBitmapD, &sim.AttPropBitmapD)
+	applyPositive(attPropBitmapDhigh, &sim.AttPropBitmapDhigh)
 
 	publishSlots := make(map[int]struct{})
 	for _, s := range parseIntList(*publishSlotsStr) {
@@ -141,7 +159,7 @@ func main() {
 	n.ConnectToPeers(parseIntList(*peerNumsStr))
 	slog.With("node", *nodeNum).Info("all peers connected")
 
-	time.Sleep(time.Duration(rand.IntN(30000)) * time.Millisecond)
+	time.Sleep(minJoinDelay + time.Duration(rand.IntN(30000))*time.Millisecond)
 	n.JoinTopics()
 
 	time.Sleep(time.Until(publishStart))

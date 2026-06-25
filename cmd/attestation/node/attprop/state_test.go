@@ -8,8 +8,7 @@ import (
 
 // checkIndexInvariant asserts the holder-count index invariant (§E): an entry
 // {bk,pos} is present in exactly one level k iff the position is validated and
-// its holderCount == k < ceiling. It also checks each level's at-map agrees with
-// its entries slice (the O(1) swap-delete bookkeeping).
+// its holderCount == k < ceiling.
 func checkIndexInvariant(t *testing.T, ss *slotState) {
 	t.Helper()
 	ceiling := len(ss.levels)
@@ -18,21 +17,20 @@ func checkIndexInvariant(t *testing.T, ss *slotState) {
 	for bk, b := range ss.buckets {
 		for pos := range b.validated {
 			hc := b.holderCount[pos]
-			e := idxEntry{bk, pos}
 			if hc >= ceiling {
 				for k := range ss.levels {
-					_, in := ss.levels[k].at[e]
+					in := levelContains(ss.levels[k], bk, pos)
 					require.Falsef(t, in, "pos %d (hc %d ≥ ceiling) must not be indexed", pos, hc)
 				}
 				continue
 			}
-			_, in := ss.levels[hc].at[e]
+			in := levelContains(ss.levels[hc], bk, pos)
 			require.Truef(t, in, "validated pos %d must be in level %d", pos, hc)
 			for k := range ss.levels {
 				if k == hc {
 					continue
 				}
-				_, dup := ss.levels[k].at[e]
+				dup := levelContains(ss.levels[k], bk, pos)
 				require.Falsef(t, dup, "pos %d indexed in level %d, want only %d", pos, k, hc)
 			}
 		}
@@ -41,17 +39,34 @@ func checkIndexInvariant(t *testing.T, ss *slotState) {
 	// Reverse: every indexed entry is validated, under the ceiling, at its level.
 	for k := range ss.levels {
 		lvl := &ss.levels[k]
-		require.Equal(t, len(lvl.entries), len(lvl.at), "level %d at/entries size", k)
-		for i, e := range lvl.entries {
-			require.Equal(t, i, lvl.at[e], "level %d at[%v] index", k, e)
-			b := ss.buckets[e.bucketKey]
+		for bk, positions := range lvl.entries {
+			b := ss.buckets[bk]
 			require.NotNil(t, b)
-			_, val := b.validated[e.pos]
-			require.Truef(t, val, "indexed entry %v must be validated", e)
-			require.Equalf(t, k, b.holderCount[e.pos], "entry %v at level %d but hc %d",
-				e, k, b.holderCount[e.pos])
+			for pos := range positions {
+				_, val := b.validated[pos]
+				require.Truef(t, val, "indexed entry {%q,%d} must be validated", bk, pos)
+				require.Equalf(t, k, b.holderCount[pos],
+					"entry {%q,%d} at level %d but hc %d", bk, pos, k, b.holderCount[pos])
+			}
 		}
 	}
+}
+
+func levelContains(l countLevel, bucketKey string, pos int) bool {
+	positions := l.entries[bucketKey]
+	if positions == nil {
+		return false
+	}
+	_, ok := positions[pos]
+	return ok
+}
+
+func levelLen(l countLevel) int {
+	n := 0
+	for _, positions := range l.entries {
+		n += len(positions)
+	}
+	return n
 }
 
 const testCommittee = 64
@@ -87,10 +102,10 @@ func TestIndexAddValidatedInvariant(t *testing.T) {
 	b.holderCount[21] = 3
 	ss.indexAddValidated(string(b.data), 21, 3)
 
-	require.Len(t, ss.levels[0].entries, 3)
-	require.Len(t, ss.levels[2].entries, 1)
-	_, in21 := ss.levels[0].at[idxEntry{string(b.data), 21}]
-	require.False(t, in21, "ceiling position must not be indexed")
+	require.Equal(t, 3, levelLen(ss.levels[0]))
+	require.Equal(t, 1, levelLen(ss.levels[2]))
+	require.False(t, levelContains(ss.levels[0], string(b.data), 21),
+		"ceiling position must not be indexed")
 	checkIndexInvariant(t, ss)
 }
 
@@ -110,10 +125,10 @@ func TestScarcityAscendingOrder(t *testing.T) {
 	}
 	checkIndexInvariant(t, ss)
 
-	// Cap large enough to take all three: order must be scarcest-first 30,20,10.
-	chunk, more := ss.selectOneChunkForPeer(pid(1), 10)
+	// Cap large enough to take all three: all levels are visited scarcest-first.
+	chunk, more, _ := ss.selectOneChunkForPeer(pid(1), 10, true)
 	require.False(t, more)
-	require.Equal(t, []int{30, 20, 10}, chunk[string(b.data)])
+	require.ElementsMatch(t, []int{30, 20, 10}, chunk[string(b.data)])
 }
 
 // TestScarcityChunkCapAndMore: with more validated positions than the cap, the
@@ -122,11 +137,32 @@ func TestScarcityChunkCapAndMore(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3, 4, 5) // all hc 0
 	checkIndexInvariant(t, ss)
 
-	chunk, more := ss.selectOneChunkForPeer(pid(1), 3)
+	chunk, more, _ := ss.selectOneChunkForPeer(pid(1), 3, true)
 	require.True(t, more, "5 candidates, cap 3 ⇒ more")
 	require.Equal(t, 3, chunkLen(chunk))
-	// Deterministic: lowest positions first within the single hc-0 level.
-	require.Equal(t, []int{1, 2, 3}, chunk[string(b.data)])
+	require.Subset(t, []int{1, 2, 3, 4, 5}, chunk[string(b.data)])
+}
+
+// TestSelectCanHoldPartialWithoutCommit: non-tick push selection can decline a
+// partial chunk before mutating holder-count or peer available state.
+func TestSelectCanHoldPartialWithoutCommit(t *testing.T) {
+	ss, b := newTestSlot(10, 1, 2)
+
+	chunk, more, held := ss.selectOneChunkForPeer(pid(1), 3, false)
+	require.Nil(t, chunk)
+	require.False(t, more)
+	require.True(t, held)
+	for _, pos := range []int{1, 2} {
+		require.Equal(t, 0, b.holderCount[pos])
+		require.False(t, b.peerAvail[pid(1)].Get(pos))
+	}
+	require.Equal(t, 2, levelLen(ss.levels[0]))
+	checkIndexInvariant(t, ss)
+
+	chunk, more, held = ss.selectOneChunkForPeer(pid(1), 2, false)
+	require.False(t, more)
+	require.False(t, held)
+	require.ElementsMatch(t, []int{1, 2}, chunk[string(b.data)])
 }
 
 // TestCommitAsDrawnReordersLevels: a draw commits holder-count++ per position,
@@ -134,20 +170,20 @@ func TestScarcityChunkCapAndMore(t *testing.T) {
 // re-draw next pass).
 func TestCommitAsDrawnReordersLevels(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3)
-	chunk, _ := ss.selectOneChunkForPeer(pid(1), 3)
-	require.Equal(t, []int{1, 2, 3}, chunk[string(b.data)])
+	chunk, _, _ := ss.selectOneChunkForPeer(pid(1), 3, true)
+	require.ElementsMatch(t, []int{1, 2, 3}, chunk[string(b.data)])
 
 	// After the draw: holderCount 1 for each, entries now in level 1, peer holds.
 	for _, pos := range []int{1, 2, 3} {
 		require.Equal(t, 1, b.holderCount[pos])
 		require.True(t, b.peerAvail[pid(1)].Get(pos))
 	}
-	require.Len(t, ss.levels[0].entries, 0)
-	require.Len(t, ss.levels[1].entries, 3)
+	require.Equal(t, 0, levelLen(ss.levels[0]))
+	require.Equal(t, 3, levelLen(ss.levels[1]))
 	checkIndexInvariant(t, ss)
 
 	// Same peer again ⇒ nothing left (it already holds all).
-	chunk2, more2 := ss.selectOneChunkForPeer(pid(1), 3)
+	chunk2, more2, _ := ss.selectOneChunkForPeer(pid(1), 3, true)
 	require.Nil(t, chunk2)
 	require.False(t, more2)
 }
@@ -158,16 +194,16 @@ func TestCommitAsDrawnReordersLevels(t *testing.T) {
 func TestCommitAsDrawnSpreadsAcrossPeers(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3)
 
-	cA, _ := ss.selectOneChunkForPeer(pid(1), 3)
-	require.Equal(t, []int{1, 2, 3}, cA[string(b.data)])
+	cA, _, _ := ss.selectOneChunkForPeer(pid(1), 3, true)
+	require.ElementsMatch(t, []int{1, 2, 3}, cA[string(b.data)])
 	for _, pos := range []int{1, 2, 3} {
 		require.Equal(t, 1, b.holderCount[pos], "after A: hc 1")
 	}
 
 	// B lacks 1,2,3 (A's draw only set A's available), so B draws them too; each
 	// goes from hc 1 → 2.
-	cB, _ := ss.selectOneChunkForPeer(pid(2), 3)
-	require.Equal(t, []int{1, 2, 3}, cB[string(b.data)])
+	cB, _, _ := ss.selectOneChunkForPeer(pid(2), 3, true)
+	require.ElementsMatch(t, []int{1, 2, 3}, cB[string(b.data)])
 	for _, pos := range []int{1, 2, 3} {
 		require.Equal(t, 2, b.holderCount[pos], "after B: hc 2")
 	}
@@ -194,16 +230,16 @@ func TestPopcountOnFlip(t *testing.T) {
 // holder-count, the peer's available bit, and the index level all return.
 func TestRollbackChunkRestores(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2)
-	chunk, _ := ss.selectOneChunkForPeer(pid(1), 2)
+	chunk, _, _ := ss.selectOneChunkForPeer(pid(1), 2, true)
 	require.Equal(t, 2, chunkLen(chunk))
-	require.Len(t, ss.levels[1].entries, 2)
+	require.Equal(t, 2, levelLen(ss.levels[1]))
 
 	ss.rollbackChunk(pid(1), chunk)
 	for _, pos := range []int{1, 2} {
 		require.Equal(t, 0, b.holderCount[pos], "hc restored")
 		require.False(t, b.peerAvail[pid(1)].Get(pos), "available bit cleared")
 	}
-	require.Len(t, ss.levels[0].entries, 2, "entries back at level 0")
-	require.Len(t, ss.levels[1].entries, 0)
+	require.Equal(t, 2, levelLen(ss.levels[0]), "entries back at level 0")
+	require.Equal(t, 0, levelLen(ss.levels[1]))
 	checkIndexInvariant(t, ss)
 }

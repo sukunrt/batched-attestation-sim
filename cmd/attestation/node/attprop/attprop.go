@@ -57,6 +57,14 @@ func weOpen(self, other peer.ID) bool {
 	return self < other
 }
 
+func (m *Manager) peerSupports(p peer.ID, protocols ...protocol.ID) (bool, error) {
+	supported, err := m.host.Peerstore().SupportsProtocols(p, protocols...)
+	if err != nil {
+		return false, err
+	}
+	return len(supported) == len(protocols), nil
+}
+
 // Config carries every tunable the att_propagation Manager needs. Field
 // defaults come from the spec sections noted inline; the node/plumbing layer
 // fills them from the run config.
@@ -72,8 +80,8 @@ type Config struct {
 
 	// §C1 mesh sizes. push Dlow/D/Dhigh = 4/5/5, bitmap low/target/high =
 	// 14/16/16 (D == Dhigh: hard cap, Dlow is the top-up trigger).
-	PushDlow, PushD, PushDhigh          int
-	BitmapLow, BitmapTarget, BitmapHigh int
+	PushDlow, PushD, PushDhigh       int
+	BitmapDlow, BitmapD, BitmapDhigh int
 
 	// §F1 per-topic SendBudgetB (default 4), §F3 MaxAttsPerMessage N (default 30),
 	// §E3 MaxPeersPerAtt lifetime ceiling.
@@ -216,7 +224,6 @@ func (m *Manager) ConnectPeer(p peer.ID) {
 // installs the reset handlers (it never receives) and returns once ctx is done.
 func (m *Manager) Run(ctx context.Context) {
 	if m.cfg.Fanout {
-		m.installFanoutResetHandlers()
 		<-ctx.Done()
 		return
 	}
@@ -234,8 +241,8 @@ func (m *Manager) PublishLocal(slot, pos int, sig, data []byte) {
 }
 
 // FanoutPublish injects a fanout (originator) node's single attestation: opens
-// a push stream to each configured peer and sends one BatchedAttestation, then
-// resets any inbound stream (§G1). Implemented in fanout.go.
+// a push stream to each configured peer and sends one BatchedAttestation.
+// Implemented in fanout.go.
 func (m *Manager) FanoutPublish(slot, pos int, sig, data []byte) {
 	m.fanoutPublish(slot, pos, sig, data)
 }

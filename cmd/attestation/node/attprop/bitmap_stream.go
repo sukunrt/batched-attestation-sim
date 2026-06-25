@@ -21,7 +21,7 @@ const bitmapTriggerK = 30
 
 // buildAvailableEnvelope assembles an available-only pb.ControlEnvelope (one
 // CommitteeAttestationPartsMetadata per bucket, available set from validated, no
-// requests) for a (topic, slot), in bucketSeq order. Returns nil when nothing is
+// requests) for a (topic, slot). Returns nil when nothing is
 // validated yet (§D1). Used to dump the full current bitmap to a peer on a fresh
 // Graft:Bitmap; it does not touch lastEmitted (that tracks the floor broadcast,
 // not point-to-point dumps). Eventloop-only (no lock).
@@ -31,7 +31,7 @@ func (m *Manager) buildAvailableEnvelope(slot int) *pb.ControlEnvelope {
 		return nil
 	}
 	ctrl := &pb.ControlEnvelope{}
-	for _, bk := range sortedBuckets(ss) {
+	for _, bk := range bucketKeys(ss) {
 		b := ss.buckets[bk]
 		if len(b.validated) == 0 {
 			continue
@@ -58,13 +58,11 @@ func (m *Manager) validatedBitmap(b *bucket) bitmap.Bitmap {
 	return avail
 }
 
-// sortedBuckets returns a slot's bucket keys in stable bucketSeq order.
-func sortedBuckets(ss *slotState) []string {
+func bucketKeys(ss *slotState) []string {
 	bks := make([]string, 0, len(ss.buckets))
 	for bk := range ss.buckets {
 		bks = append(bks, bk)
 	}
-	slices.SortFunc(bks, func(a, b string) int { return ss.bucketSeq[a] - ss.bucketSeq[b] })
 	return bks
 }
 
@@ -112,7 +110,7 @@ func (m *Manager) changedAvailableEnvelope(
 	ss *slotState, slot int, onlyChanged bool,
 ) *pb.ControlEnvelope {
 	ctrl := &pb.ControlEnvelope{}
-	for _, bk := range sortedBuckets(ss) {
+	for _, bk := range bucketKeys(ss) {
 		b := ss.buckets[bk]
 		if len(b.validated) == 0 {
 			continue

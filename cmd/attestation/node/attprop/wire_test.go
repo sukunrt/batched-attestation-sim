@@ -150,6 +150,8 @@ func TestWireSubstrate(t *testing.T) {
 			ID:    recvPeerID,
 			Addrs: []ma.Multiaddr{nw.addr(receiver)},
 		}))
+		require.NoError(t, nw.hosts[opener].Peerstore().AddProtocols(recvPeerID,
+			PushProtocol(0), BitmapProtocol(0), ControlProtocol(0)))
 		om.ConnectPeer(recvPeerID)
 
 		up := waitEvent[peerUpEvent](t, om)

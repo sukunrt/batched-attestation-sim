@@ -2,7 +2,6 @@ package attprop
 
 import (
 	"context"
-	"slices"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -169,6 +168,9 @@ func (m *Manager) newPeerSender(
 }
 
 func (s *peerSender) closeAndReset() {
+	// Closing lets an idle sender goroutine exit its range; Reset unblocks a
+	// goroutine stuck in WriteMsg. The eventloop removes the sender from its maps
+	// before future enqueues can target this channel.
 	close(s.work)
 	if s.stream != nil {
 		s.stream.Reset()
@@ -254,6 +256,7 @@ func (m *Manager) dispatch(ev event) {
 		m.trySelectAndSend()
 	case sendDoneEvent:
 		m.onSendDone(e.peer)
+		m.trySelectAndSend()
 	case tickEvent:
 		m.onTick()
 	case bitmapFloorEvent:
@@ -332,7 +335,6 @@ func (m *Manager) onSendDone(p peer.ID) {
 		s.inFlight = false
 		m.activeData--
 	}
-	m.trySelectAndSend()
 }
 
 // onTick runs the tick selection pass: while sendAllToPushMesh is true, partial
@@ -425,7 +427,7 @@ func (m *Manager) onInboundControl(from peer.ID, ctrl *pb.AttPropControl) {
 //
 //  1. Push, exempt from B: for each push peer with no in-flight send, select its
 //     scarcest ≤ N chunk. A full chunk (N items) is sent immediately; a partial
-//     chunk is sent only on the tick flush (sendAllToPushMesh), otherwise held.
+//     chunk is selected only on the tick flush (sendAllToPushMesh).
 //  2. Bitmap, gated: for each bitmap peer with no in-flight send while
 //     activeData < B, send its scarcest chunk.
 func (m *Manager) trySelectAndSend() {
@@ -433,19 +435,11 @@ func (m *Manager) trySelectAndSend() {
 		if s.inFlight || m.mesh.role(p) != rolePush {
 			continue
 		}
-		chunk, more, ss := m.selectForPeer(p)
+		chunk, ss := m.selectForPeer(p, m.sendAllToPushMesh)
 		if chunk == nil {
 			continue
 		}
-		// A full chunk goes anytime; a partial chunk waits for the tick flush so
-		// small batches don't trickle out (§F4). Full = hit the per-message cap,
-		// whether or not candidates remain beyond it (`more`).
-		full := more || chunkLen(chunk) >= m.cfg.MaxAttsPerMessage
-		if full || m.sendAllToPushMesh {
-			m.send(p, ss, chunk)
-		} else {
-			ss.rollbackChunk(p, chunk)
-		}
+		m.send(p, ss, chunk)
 	}
 	for p, s := range m.senders {
 		if m.activeData >= m.cfg.SendBudgetB {
@@ -454,7 +448,7 @@ func (m *Manager) trySelectAndSend() {
 		if s.inFlight || m.mesh.role(p) != roleBitmap {
 			continue
 		}
-		chunk, _, ss := m.selectForPeer(p)
+		chunk, ss := m.selectForPeer(p, true)
 		if chunk == nil {
 			continue
 		}
@@ -463,23 +457,25 @@ func (m *Manager) trySelectAndSend() {
 }
 
 // selectForPeer draws the peer's scarcest chunk from the active slots for this
-// manager's topic. It returns the chunk, whether more candidates remain beyond
-// it, and the slotState the chunk was drawn from (nil chunk when the peer needs
-// nothing). The draw commits holder-count as it goes (§E2); callers that decide
-// not to send must rollbackChunk.
-func (m *Manager) selectForPeer(p peer.ID) (map[string][]int, bool, *slotState) {
+// manager's topic. If allowPartial is false, only full chunks are selected so
+// held push sends do not need to be rolled back. The draw commits holder-count
+// as it goes (§E2).
+func (m *Manager) selectForPeer(p peer.ID, allowPartial bool) (map[string][]int, *slotState) {
 	for _, ss := range m.slots {
-		chunk, more := ss.selectOneChunkForPeer(p, m.cfg.MaxAttsPerMessage)
+		chunk, _, held := ss.selectOneChunkForPeer(p, m.cfg.MaxAttsPerMessage, allowPartial)
 		if chunk != nil {
-			return chunk, more, ss
+			return chunk, ss
+		}
+		if held {
+			return nil, nil
 		}
 	}
-	return nil, false, nil
+	return nil, nil
 }
 
-// rollbackChunk undoes a drawn-but-not-sent chunk: clear the peer's available
-// bit, decrement holder-count, and bump the index back down one level. Keeps the
-// scarcity state honest when a partial push chunk is held for the tick (§F4).
+// rollbackChunk undoes a committed chunk that could not be handed to the sender:
+// clear the peer's available bit, decrement holder-count, and bump the index
+// back down one level.
 func (ss *slotState) rollbackChunk(p peer.ID, chunk map[string][]int) {
 	for bk, positions := range chunk {
 		b := ss.buckets[bk]
@@ -494,7 +490,6 @@ func (ss *slotState) rollbackChunk(p peer.ID, chunk map[string][]int) {
 			bm.Clear(pos)
 			hc := b.holderCount[pos]
 			b.holderCount[pos] = hc - 1
-			// Move the index entry back from level hc to hc-1.
 			if hc-1 >= 0 {
 				ss.indexBumpHolderDown(bk, pos, hc)
 			}
@@ -503,15 +498,14 @@ func (ss *slotState) rollbackChunk(p peer.ID, chunk map[string][]int) {
 }
 
 // indexBumpHolderDown moves a validated entry from level `from` to `from-1`
-// after a holder-count decrement (the rollback counterpart of indexBumpHolder).
-// Like indexBumpHolder it only moves an entry actually present in `from`.
+// after a holder-count decrement. Like indexBumpHolder it only moves an entry
+// actually present in `from`.
 func (ss *slotState) indexBumpHolderDown(bk string, pos, from int) {
-	e := idxEntry{bk, pos}
-	if from >= len(ss.levels) || !ss.levels[from].remove(e) {
+	if from >= len(ss.levels) || !ss.levels[from].remove(bk, pos) {
 		return
 	}
 	if to := from - 1; to >= 0 {
-		ss.levels[to].add(e)
+		ss.levels[to].add(bk, pos)
 	}
 }
 
@@ -522,7 +516,7 @@ func (ss *slotState) indexBumpHolderDown(bk string, pos, from int) {
 // so a draining push send counts against bitmap fill (§F1).
 func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 	env := &pb.BatchedAttestationEnvelope{}
-	bks := sortedBucketKeys(ss, chunk)
+	bks := chunkBucketKeys(chunk)
 	var total int
 	for _, bk := range bks {
 		b := ss.buckets[bk]
@@ -531,14 +525,25 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 	}
 	frame, err := proto.Marshal(env)
 	if err != nil {
-		m.logger.Error("marshal data envelope", "err", err)
+		m.logger.Error("CRITICAL: marshal data envelope", "err", err)
 		ss.rollbackChunk(p, chunk)
 		return
 	}
 	s := m.senders[p]
+	select {
+	case s.work <- frame:
+	default:
+		m.logger.Error("CRITICAL: attprop data sender queue full",
+			"peer", shortPeer(p),
+			"topic", m.cfg.TopicIndex,
+			"queued", len(s.work),
+			"cap", cap(s.work),
+		)
+		ss.rollbackChunk(p, chunk)
+		return
+	}
 	s.inFlight = true
 	m.activeData++
-	s.work <- frame
 	m.logger.Debug("attprop_send_data",
 		"peer", shortPeer(p),
 		"topic", m.cfg.TopicIndex,
@@ -741,14 +746,11 @@ func chunkLen(chunk map[string][]int) int {
 	return n
 }
 
-// sortedBucketKeys returns the chunk's bucket keys in stable bucketSeq order, so
-// an envelope's batches are deterministic.
-func sortedBucketKeys(ss *slotState, chunk map[string][]int) []string {
+func chunkBucketKeys(chunk map[string][]int) []string {
 	bks := make([]string, 0, len(chunk))
 	for bk := range chunk {
 		bks = append(bks, bk)
 	}
-	slices.SortFunc(bks, func(a, b string) int { return ss.bucketSeq[a] - ss.bucketSeq[b] })
 	return bks
 }
 
@@ -756,23 +758,28 @@ func sortedBucketKeys(ss *slotState, chunk map[string][]int) []string {
 // (slot-less) push stream. attestation_data is unique per (topic, slot), so if
 // any existing slotState already holds a bucket for this data we reuse its slot
 // (learned earlier from our own publish, fanout, or a bitmap advertisement which
-// carries Slot). Otherwise we attribute it to the latest active slot: the sim
-// drives slots sequentially (publish → drain slotDuration → next), so unseen
-// push data belongs to the slot whose window is currently open. Defaults to 1
-// when nothing is active yet.
+// carries Slot). Otherwise we attribute it to the slot whose window is currently
+// open: the sim drives slots sequentially (publish → drain slotDuration → next),
+// so unseen push data belongs to the current wall-clock slot. We cannot infer
+// this from existing buckets — a node forwarding only what it receives never
+// holds a bucket for the live slot until its first push of that slot arrives, so
+// it would otherwise misfile every new slot under the last one it knows.
 func (m *Manager) slotForData(data []byte) int {
 	key := string(data)
-	latest := 0
 	for slot, ss := range m.slots {
 		if _, ok := ss.buckets[key]; ok {
 			return slot
 		}
-		if slot > latest {
-			latest = slot
-		}
 	}
-	if latest == 0 {
+	return m.currentSlot()
+}
+
+// currentSlot returns the slot whose window is open now, derived from the
+// wall-clock distance since slot 1 started. Defaults to 1 before slot 1 begins.
+func (m *Manager) currentSlot() int {
+	elapsed := time.Since(m.cfg.PublishStart)
+	if m.cfg.SlotDuration <= 0 || elapsed < 0 {
 		return 1
 	}
-	return latest
+	return 1 + int(elapsed/m.cfg.SlotDuration)
 }

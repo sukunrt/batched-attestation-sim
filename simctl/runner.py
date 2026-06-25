@@ -213,13 +213,21 @@ def generate_shadow_yaml(
             )
             if config.send_available_with_data:
                 args_parts.append("-send-available-with-data")
-        # att_propagation reads its tunables from config.yaml directly; only the
-        # mode bool needs a flag. N reuses -max-attestations-per-message.
         if config.att_propagation:
             args_parts.append("-att-propagation")
             args_parts.append(
                 f"-max-attestations-per-message={config.max_attestations_per_message}"
             )
+            for flag, value in (
+                ("attprop-push-dlow", config.attprop_push_dlow),
+                ("attprop-push-d", config.attprop_push_d),
+                ("attprop-push-dhigh", config.attprop_push_dhigh),
+                ("attprop-bitmap-dlow", config.attprop_bitmap_dlow),
+                ("attprop-bitmap-d", config.attprop_bitmap_d),
+                ("attprop-bitmap-dhigh", config.attprop_bitmap_dhigh),
+            ):
+                if value > 0:
+                    args_parts.append(f"-{flag}={value}")
 
         node_memberships = memberships.get(node_num, [])
         if node_memberships:

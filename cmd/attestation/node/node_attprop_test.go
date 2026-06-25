@@ -13,7 +13,7 @@ import (
 func attPropParams() AttPropParams {
 	return AttPropParams{
 		PushDlow: 4, PushD: 5, PushDhigh: 5,
-		BitmapLow: 14, BitmapTarget: 16, BitmapHigh: 16,
+		BitmapDlow: 14, BitmapD: 16, BitmapDhigh: 16,
 		SendBudgetB: 4, MaxAttsPerMessage: 30, MaxPeersPerAtt: 16,
 		TickInterval:        20 * time.Millisecond,
 		BitmapFloorInterval: 100 * time.Millisecond,
@@ -57,7 +57,7 @@ func TestAttPropStartNoGossipsub(t *testing.T) {
 			t.Fatal("att_propagation: gossipsub (ps) must not be created")
 		}
 
-		// JoinTopics is a no-op in this mode: no gossipsub topics get joined.
+		// JoinTopics opens attprop streams, but never creates gossipsub topics.
 		n.JoinTopics()
 		if len(n.topics) != 0 || len(n.subs) != 0 {
 			t.Fatalf("att_propagation: JoinTopics created topics=%d subs=%d, want 0",

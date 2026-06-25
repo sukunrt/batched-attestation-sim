@@ -61,9 +61,9 @@ type SimConfig struct {
 	AttPropPushDhigh int `yaml:"attprop_push_dhigh"`
 
 	// §C1 bitmap-mesh sizes (default 14/16/16).
-	AttPropBitmapLow    int `yaml:"attprop_bitmap_low"`
-	AttPropBitmapTarget int `yaml:"attprop_bitmap_target"`
-	AttPropBitmapHigh   int `yaml:"attprop_bitmap_high"`
+	AttPropBitmapDlow  int `yaml:"attprop_bitmap_dlow"`
+	AttPropBitmapD     int `yaml:"attprop_bitmap_d"`
+	AttPropBitmapDhigh int `yaml:"attprop_bitmap_dhigh"`
 
 	// §F1 send budget B (default 4), §E3 lifetime per-position peer ceiling
 	// (default 30, set generously ≥ D).
@@ -121,9 +121,9 @@ func (s *SimConfig) AttPropConfig() node.AttPropParams {
 		PushDlow:            pick(s.AttPropPushDlow, 4),
 		PushD:               pick(s.AttPropPushD, 5),
 		PushDhigh:           pick(s.AttPropPushDhigh, 5),
-		BitmapLow:           pick(s.AttPropBitmapLow, 14),
-		BitmapTarget:        pick(s.AttPropBitmapTarget, 16),
-		BitmapHigh:          pick(s.AttPropBitmapHigh, 16),
+		BitmapDlow:          pick(s.AttPropBitmapDlow, 14),
+		BitmapD:             pick(s.AttPropBitmapD, 16),
+		BitmapDhigh:         pick(s.AttPropBitmapDhigh, 16),
 		SendBudgetB:         pick(s.AttPropSendBudgetB, 4),
 		MaxAttsPerMessage:   s.EffectiveMaxAttestationsPerMessage(),
 		MaxPeersPerAtt:      pick(s.AttPropMaxPeersPerAtt, 30),

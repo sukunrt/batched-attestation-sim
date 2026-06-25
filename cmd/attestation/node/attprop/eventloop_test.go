@@ -214,7 +214,7 @@ func TestSendDoneReselects(t *testing.T) {
 
 	// Drain the first frame and signal completion; the next chunk is selected.
 	<-m.senders[k].work
-	m.onSendDone(pid(0))
+	m.dispatch(sendDoneEvent{peer: pid(0)})
 	require.True(t, m.senders[k].inFlight, "next send started after sendDone")
 	require.Len(t, m.senders[k].work, 1)
 }
@@ -248,7 +248,38 @@ func TestInboundDataMarksHolder(t *testing.T) {
 		require.False(t, validated, "not forwardable until verifier promotes (§G2)")
 	}
 	// Validating positions are NOT in the scarcity index yet.
-	require.Equal(t, 0, len(ss.levels[1].entries))
+	require.Equal(t, 0, levelLen(ss.levels[1]))
+}
+
+// TestInboundDataUnknownDataUsesCurrentSlot: a node that only forwards what it
+// receives holds no bucket for the live slot until the first push of that slot
+// lands. Unknown push data must be filed under the current wall-clock slot, not
+// the latest slot it already knows — otherwise every new slot is misattributed
+// to slot 1 (the regression that hid slots 2+ from analysis).
+func TestInboundDataUnknownDataUsesCurrentSlot(t *testing.T) {
+	m := schedManager(t, 30, 4, 1000)
+	m.verifier = verify.New(func() time.Duration { return 0 }, 0, time.Hour, slog.Default())
+	m.cfg.SlotDuration = 12 * time.Second
+
+	// Slot 1 receive lands while slot 1's window is open → a slot-1 bucket exists.
+	m.cfg.PublishStart = time.Now()
+	m.onInboundData(pid(7), &pb.BatchedAttestationEnvelope{Batches: []*pb.BatchedAttestation{{
+		AttestationData: makeData(1), AttestorIndices: []uint32{1}, Signatures: [][]byte{{1}},
+	}}})
+	require.NotNil(t, m.getSlotState(1).buckets[string(makeData(1))])
+
+	// The window advances to slot 2; new unseen data arrives. It must file under
+	// slot 2 even though the only bucket the node holds is slot 1's.
+	m.cfg.PublishStart = time.Now().Add(-13 * time.Second)
+	m.onInboundData(pid(7), &pb.BatchedAttestationEnvelope{Batches: []*pb.BatchedAttestation{{
+		AttestationData: makeData(2), AttestorIndices: []uint32{2}, Signatures: [][]byte{{2}},
+	}}})
+
+	require.Nil(t, m.getSlotState(1).buckets[string(makeData(2))],
+		"slot-2 data must not be filed under slot 1")
+	ss2 := m.getSlotState(2)
+	require.NotNil(t, ss2, "current wall-clock slot is 2")
+	require.NotNil(t, ss2.buckets[string(makeData(2))], "unknown data filed under current slot")
 }
 
 // TestInboundDataBadIndexDropsBatch: an out-of-range attestor index voids the

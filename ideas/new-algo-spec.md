@@ -194,8 +194,11 @@ our send). Selection walks levels ascending (scarcest first). Deferred to F: mes
   care when built, but the substrate is proven.
 - Prototyping risk (backpressure) — RESOLVED: simnet runs real libp2p/QUIC, so stream Write blocks
   under a full flow-control window — the "Write returns = slot frees" signal is real.
-- Holder-count is a LOCAL-view sample (bitmaps from bitmap peers + our/their sends), not global
-  truth — scarcity decisions are approximate, which is fine for gossip.
+- Scarcity (holder-count) is a deliberate **local proxy for how far a position has propagated**:
+  low count ≈ under-propagated ≈ send first. Built from every signal we get — bitmap-mesh
+  advertisements, data any peer pushes us (push peers forward us the actual messages), and our own
+  sends. It's a local sample that varies per node and tightens late via bitmap advertisements,
+  exactly when mop-up needs it.
 
 ## Prototype plan (build order)
 De-risk first, then the vertical slice, then the scarcity/bitmap layer, then measure.

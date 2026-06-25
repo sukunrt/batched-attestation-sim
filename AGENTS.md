@@ -222,9 +222,9 @@ max_attestations_per_message: 30   # optional, the per-message size cap N (reuse
 attprop_push_dlow: 0
 attprop_push_d: 0
 attprop_push_dhigh: 0
-attprop_bitmap_low: 0
-attprop_bitmap_target: 0
-attprop_bitmap_high: 0
+attprop_bitmap_dlow: 0
+attprop_bitmap_d: 0
+attprop_bitmap_dhigh: 0
 attprop_send_budget_b: 0
 attprop_max_peers_per_att: 0
 attprop_tick_interval_ms: 0

@@ -12,9 +12,9 @@ ATTPROP_FIELDS = (
     "attprop_push_dlow",
     "attprop_push_d",
     "attprop_push_dhigh",
-    "attprop_bitmap_low",
-    "attprop_bitmap_target",
-    "attprop_bitmap_high",
+    "attprop_bitmap_dlow",
+    "attprop_bitmap_d",
+    "attprop_bitmap_dhigh",
     "attprop_send_budget_b",
     "attprop_max_peers_per_att",
     "attprop_tick_interval_ms",
@@ -56,10 +56,22 @@ def test_att_propagation_emits_flag_and_n():
         topology=TopologyConfig(num_nodes=2),
         att_propagation=True,
         max_attestations_per_message=40,
+        attprop_push_dlow=6,
+        attprop_push_d=8,
+        attprop_push_dhigh=12,
+        attprop_bitmap_dlow=10,
+        attprop_bitmap_d=14,
+        attprop_bitmap_dhigh=16,
     )
     args = _args(cfg, "node0")
     assert "-att-propagation" in args
     assert "-max-attestations-per-message=40" in args
+    assert "-attprop-push-dlow=6" in args
+    assert "-attprop-push-d=8" in args
+    assert "-attprop-push-dhigh=12" in args
+    assert "-attprop-bitmap-dlow=10" in args
+    assert "-attprop-bitmap-d=14" in args
+    assert "-attprop-bitmap-dhigh=16" in args
     # att_propagation drops gossipsub, so no partial-mode flags ride along.
     assert "-use-partial-messages" not in args
     assert "-partial-priority" not in args

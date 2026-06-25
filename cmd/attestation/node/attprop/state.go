@@ -36,49 +36,45 @@ type attEntry struct {
 	Data      []byte
 }
 
-// idxEntry identifies one forwardable attestation across all buckets at a
+// candidate identifies one forwardable attestation across all buckets at a
 // (topic, slot): bucketKey is string(attestation_data); pos is the committee
-// position. The same position in two forks is two distinct entries.
-type idxEntry struct {
+// position. The same position in two forks is two distinct candidates.
+type candidate struct {
 	bucketKey string
 	pos       int
 }
 
-// countLevel holds the entries currently at one holder-count value. entries is
-// an append-ordered slice (deterministic, no per-pass sort); at maps an entry
-// to its slice index for O(1) swap-delete. Mirrors node/partial_priority.go's
-// countLevel verbatim.
+// countLevel holds the entries currently at one holder-count value.
 type countLevel struct {
-	entries []idxEntry
-	at      map[idxEntry]int
+	entries map[string]map[int]struct{}
 }
 
-func (l *countLevel) add(e idxEntry) {
-	if l.at == nil {
-		l.at = make(map[idxEntry]int)
+func (l *countLevel) add(bucketKey string, pos int) {
+	if l.entries == nil {
+		l.entries = make(map[string]map[int]struct{})
 	}
-	if _, ok := l.at[e]; ok {
-		return
+	positions := l.entries[bucketKey]
+	if positions == nil {
+		positions = make(map[int]struct{})
+		l.entries[bucketKey] = positions
 	}
-	l.at[e] = len(l.entries)
-	l.entries = append(l.entries, e)
+	positions[pos] = struct{}{}
 }
 
 // remove deletes e and reports whether it was present (so callers can move an
 // entry only when it was actually indexed).
-func (l *countLevel) remove(e idxEntry) bool {
-	i, ok := l.at[e]
-	if !ok {
+func (l *countLevel) remove(bucketKey string, pos int) bool {
+	positions := l.entries[bucketKey]
+	if positions == nil {
 		return false
 	}
-	last := len(l.entries) - 1
-	if i != last {
-		moved := l.entries[last]
-		l.entries[i] = moved
-		l.at[moved] = i
+	if _, ok := positions[pos]; !ok {
+		return false
 	}
-	l.entries = l.entries[:last]
-	delete(l.at, e)
+	delete(positions, pos)
+	if len(positions) == 0 {
+		delete(l.entries, bucketKey)
+	}
 	return true
 }
 
@@ -105,7 +101,6 @@ type bucket struct {
 // slotState holds all buckets for a (topic, slot) plus a holder-count-ordered
 // index over their validated positions. levels[k] holds the entries whose
 // current holder-count == k; selection walks levels ascending (scarcest first).
-// bucketSeq gives each bucket a stable order for deterministic tie-breaking.
 // Mirrors node/partial_priority.go's prioritySlotState but keyed by holder-count
 // instead of sendCount.
 type slotState struct {
@@ -113,8 +108,6 @@ type slotState struct {
 	committeeSize int // wire-level bitmap capacity, for sizing per-peer available
 	buckets       map[string]*bucket
 	levels        []countLevel
-	bucketSeq     map[string]int
-	nextSeq       int
 
 	// validatedSinceEmit counts positions validated since the last bitmap
 	// advertisement for this slot; reaching bitmapTriggerK fires a +K emit (§D2).
@@ -144,28 +137,17 @@ func newSlotState(slot, maxPeers, committeeSize int) *slotState {
 		committeeSize: committeeSize,
 		buckets:       make(map[string]*bucket),
 		levels:        make([]countLevel, maxPeers),
-		bucketSeq:     make(map[string]int),
-	}
-}
-
-// ensureBucketSeq assigns a stable order index to a bucket key on first sight,
-// for deterministic tie-breaking in selection.
-func (ss *slotState) ensureBucketSeq(bk string) {
-	if _, ok := ss.bucketSeq[bk]; !ok {
-		ss.bucketSeq[bk] = ss.nextSeq
-		ss.nextSeq++
 	}
 }
 
 // getOrCreateBucket returns (creating as needed) the bucket for attestation_data
-// within this slot, registering its stable bucket-order seq.
+// within this slot.
 func (ss *slotState) getOrCreateBucket(data []byte) *bucket {
 	key := string(data)
 	b, ok := ss.buckets[key]
 	if !ok {
 		b = newBucket(data)
 		ss.buckets[key] = b
-		ss.ensureBucketSeq(key)
 	}
 	return b
 }
@@ -205,8 +187,7 @@ func (ss *slotState) indexAddValidated(bk string, pos, holderCount int) {
 	if holderCount >= len(ss.levels) {
 		return
 	}
-	ss.ensureBucketSeq(bk)
-	ss.levels[holderCount].add(idxEntry{bk, pos})
+	ss.levels[holderCount].add(bk, pos)
 }
 
 // indexBumpHolder moves a validated entry from level `from` to `from+1` after a
@@ -217,12 +198,11 @@ func (ss *slotState) indexAddValidated(bk string, pos, holderCount int) {
 // actually present in `from` is moved, so the index keeps holding only
 // validated positions.
 func (ss *slotState) indexBumpHolder(bk string, pos, from int) {
-	e := idxEntry{bk, pos}
-	if from >= len(ss.levels) || !ss.levels[from].remove(e) {
+	if from >= len(ss.levels) || !ss.levels[from].remove(bk, pos) {
 		return
 	}
 	if to := from + 1; to < len(ss.levels) {
-		ss.levels[to].add(e)
+		ss.levels[to].add(bk, pos)
 	}
 }
 
@@ -246,12 +226,13 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 }
 
 // selectOneChunkForPeer draws up to maxN of the scarcest positions peer p lacks,
-// ascending holder-count (scarcest first), deterministic within a level
-// (bucketSeq then pos), then commits each draw via markHolder so the next peer
-// served in the same pass sees the updated holder-count — the commit-as-drawn
-// spreading of §E2. It returns the chunk as bucketKey->positions in priority
-// order (nil when the peer has nothing left to receive) plus `more`: whether the
-// peer needs additional positions we hold beyond this chunk.
+// ascending holder-count (scarcest first), then commits each draw via markHolder
+// so the next peer served in the same pass sees the updated holder-count — the
+// commit-as-drawn spreading of §E2. It returns the chunk as bucketKey->positions
+// in priority order (nil when the peer has nothing left to receive) plus `more`:
+// whether the peer needs additional positions we hold beyond this chunk. If
+// allowPartial is false, a non-full chunk is held by returning nil, held=true
+// before committing it.
 //
 // Candidates are collected read-only per level first, then committed, so the
 // index mutation in markHolder can't perturb the in-progress scan. Entries in
@@ -259,36 +240,36 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 func (ss *slotState) selectOneChunkForPeer(
 	p peer.ID,
 	maxN int,
-) (chunk map[string][]int, more bool) {
-	var drawn []idxEntry
+	allowPartial bool,
+) (chunk map[string][]int, more bool, held bool) {
+	var drawn []candidate
 	for k := 0; k < len(ss.levels) && !more; k++ {
-		var cand []idxEntry
-		for _, e := range ss.levels[k].entries {
-			b := ss.buckets[e.bucketKey]
+		for bucketKey, positions := range ss.levels[k].entries {
+			b := ss.buckets[bucketKey]
 			if b == nil {
 				continue
 			}
-			if b.peerAvailFor(p, ss.committeeSize).Get(e.pos) {
-				continue
+			peerAvail := b.peerAvailFor(p, ss.committeeSize)
+			for pos := range positions {
+				if peerAvail.Get(pos) {
+					continue
+				}
+				if len(drawn) == maxN {
+					more = true // a needed candidate exists beyond this chunk
+					break
+				}
+				drawn = append(drawn, candidate{bucketKey, pos})
 			}
-			cand = append(cand, e)
-		}
-		slices.SortFunc(cand, func(a, b idxEntry) int {
-			if d := ss.bucketSeq[a.bucketKey] - ss.bucketSeq[b.bucketKey]; d != 0 {
-				return d
-			}
-			return a.pos - b.pos
-		})
-		for _, e := range cand {
-			if len(drawn) == maxN {
-				more = true // a needed candidate exists beyond this chunk
+			if more {
 				break
 			}
-			drawn = append(drawn, e)
 		}
 	}
 	if len(drawn) == 0 {
-		return nil, false
+		return nil, false, false
+	}
+	if !allowPartial && !more && len(drawn) < maxN {
+		return nil, false, true
 	}
 
 	chunk = make(map[string][]int)
@@ -297,7 +278,7 @@ func (ss *slotState) selectOneChunkForPeer(
 		chunk[e.bucketKey] = append(chunk[e.bucketKey], e.pos)
 		ss.markHolder(b, p, e.pos)
 	}
-	return chunk, more
+	return chunk, more, false
 }
 
 // encodeBatch builds a BatchedAttestation for the given positions, emitting

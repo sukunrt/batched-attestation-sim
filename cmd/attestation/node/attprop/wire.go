@@ -52,6 +52,10 @@ func (m *Manager) newFrameReader(s network.Stream) msgio.ReadCloser {
 // reader goroutine that drains framed messages until the remote half-closes
 // (EOF) or resets.
 func (m *Manager) start(ctx context.Context) {
+	if m.cfg.Fanout {
+		return
+	}
+
 	m.host.SetStreamHandler(PushProtocol(m.cfg.TopicIndex), m.inboundHandler(ctx, kindPush))
 	m.host.SetStreamHandler(BitmapProtocol(m.cfg.TopicIndex), m.inboundHandler(ctx, kindBitmap))
 	m.host.SetStreamHandler(ControlProtocol(m.cfg.TopicIndex), m.inboundHandler(ctx, kindControl))
@@ -90,23 +94,37 @@ func (m *Manager) connectPeer(p peer.ID) {
 // readers for the peer's frames on those same streams, and posts a peerUpEvent
 // carrying the writers. The once map guards against opening twice.
 func (m *Manager) openSendStreams(ctx context.Context, p peer.ID) {
+	pushProto := PushProtocol(m.cfg.TopicIndex)
+	bitmapProto := BitmapProtocol(m.cfg.TopicIndex)
+	controlProto := ControlProtocol(m.cfg.TopicIndex)
+	supports, err := m.peerSupports(p, pushProto, bitmapProto, controlProto)
+	if err != nil {
+		m.logger.Debug("check attprop protocol support", "topic", m.cfg.TopicIndex,
+			"peer", shortPeer(p), "err", err)
+		return
+	}
+	if !supports {
+		m.logger.Debug("peer does not support attprop streams", "topic", m.cfg.TopicIndex,
+			"peer", shortPeer(p))
+		return
+	}
 	if !m.markSendStreamsOpening(p) {
 		return // already opening/open for this peer
 	}
-	push, err := m.host.NewStream(ctx, p, PushProtocol(m.cfg.TopicIndex))
+	push, err := m.host.NewStream(ctx, p, pushProto)
 	if err != nil {
 		m.logger.Error("open push stream", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "err", err)
 		m.clearSendStreamsOpening(p)
 		return
 	}
-	bm, err := m.host.NewStream(ctx, p, BitmapProtocol(m.cfg.TopicIndex))
+	bm, err := m.host.NewStream(ctx, p, bitmapProto)
 	if err != nil {
 		m.logger.Error("open bitmap stream", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "err", err)
 		push.Reset()
 		m.clearSendStreamsOpening(p)
 		return
 	}
-	ctrl, err := m.host.NewStream(ctx, p, ControlProtocol(m.cfg.TopicIndex))
+	ctrl, err := m.host.NewStream(ctx, p, controlProto)
 	if err != nil {
 		m.logger.Error("open control stream", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "err", err)
 		push.Reset()

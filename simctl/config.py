@@ -143,9 +143,9 @@ class AttestationSimConfig(BaseModel):
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0
     attprop_push_dhigh: int = 0
-    attprop_bitmap_low: int = 0
-    attprop_bitmap_target: int = 0
-    attprop_bitmap_high: int = 0
+    attprop_bitmap_dlow: int = 0
+    attprop_bitmap_d: int = 0
+    attprop_bitmap_dhigh: int = 0
     attprop_send_budget_b: int = 0
     attprop_max_peers_per_att: int = 0
     attprop_tick_interval_ms: int = 0
@@ -225,9 +225,9 @@ class AttestationSimParams(BaseModel):
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0
     attprop_push_dhigh: int = 0
-    attprop_bitmap_low: int = 0
-    attprop_bitmap_target: int = 0
-    attprop_bitmap_high: int = 0
+    attprop_bitmap_dlow: int = 0
+    attprop_bitmap_d: int = 0
+    attprop_bitmap_dhigh: int = 0
     attprop_send_budget_b: int = 0
     attprop_max_peers_per_att: int = 0
     attprop_tick_interval_ms: int = 0

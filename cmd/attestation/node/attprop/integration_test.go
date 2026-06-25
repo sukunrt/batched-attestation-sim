@@ -134,7 +134,9 @@ func (h *harness) connectUp(t *testing.T, ctx context.Context, a, b int) {
 	require.NoError(t, h.sn.hosts[a].Connect(ctx, peer.AddrInfo{
 		ID: testPeerID(b), Addrs: []ma.Multiaddr{h.sn.addr(b)},
 	}))
-	for _, m := range h.managers[a] {
+	for topicIdx, m := range h.managers[a] {
+		require.NoError(t, h.sn.hosts[a].Peerstore().AddProtocols(testPeerID(b),
+			PushProtocol(topicIdx), BitmapProtocol(topicIdx), ControlProtocol(topicIdx)))
 		m.ConnectPeer(testPeerID(b))
 	}
 	synctest.Wait()
@@ -152,10 +154,10 @@ func (m *Manager) forceRole(p peer.ID, r meshRole) {
 	m.onLoop(func() { m.mesh.roles[p] = r })
 }
 
-// TestFanoutInjectAndReset exercises §G1: a fanout node injects its single
-// attestation to its connected peer (the mesh node receives + validates it), and
-// resets any stream a peer opens back to it.
-func TestFanoutInjectAndReset(t *testing.T) {
+// TestFanoutInjectNoInboundProtocol exercises §G1: a fanout node injects its
+// single attestation to its connected peer, and does not advertise inbound
+// attprop protocols back to mesh peers.
+func TestFanoutInjectNoInboundProtocol(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
@@ -169,13 +171,12 @@ func TestFanoutInjectAndReset(t *testing.T) {
 
 		h := newHarness(t, ctx, 2, func(i int) bool { return i == fan },
 			map[int]Tracer{mesh: recv})
-		// Install the fanout reset handlers before any inbound stream arrives.
-		h.manager(fan, 0).installFanoutResetHandlers()
 
 		// Live connection so the fanout publish path can open push streams to B.
 		require.NoError(t, h.sn.hosts[fan].Connect(ctx, peer.AddrInfo{
 			ID: testPeerID(mesh), Addrs: []ma.Multiaddr{h.sn.addr(mesh)},
 		}))
+		require.NoError(t, h.sn.hosts[fan].Peerstore().AddProtocols(testPeerID(mesh), PushProtocol(0)))
 		synctest.Wait()
 
 		h.manager(fan, 0).FanoutPublish(1, 7, []byte{0xab}, makeData(1))
@@ -186,12 +187,8 @@ func TestFanoutInjectAndReset(t *testing.T) {
 		require.True(t, got.seen, "mesh node received the fanout attestation")
 		require.Equal(t, 7, got.pos)
 
-		// Any stream the mesh node opens to the fanout node is reset (§G1).
-		s, err := h.sn.hosts[mesh].NewStream(ctx, testPeerID(fan), PushProtocol(0))
-		require.NoError(t, err)
-		_, _ = s.Write([]byte{0x01})
-		_, rerr := s.Read(make([]byte, 1))
-		require.Error(t, rerr, "fanout resets inbound streams")
+		_, err := h.sn.hosts[mesh].NewStream(ctx, testPeerID(fan), PushProtocol(0))
+		require.Error(t, err, "fanout does not support inbound attprop streams")
 		synctest.Wait()
 	})
 }

@@ -1,36 +1,66 @@
-# Attestation Sync
+# Attestation Broadcast
 
-- Reduce D. D=8 is too high. Target: D_Push=4
+New protocol for broadcasting attestations. Lot of the details are the same as the existing gossipsub partial messages implementation but the substrate is changed from gossipsub to a new protocol. 
 
-- Have a separate IHave advertisement for a larger set than currently done. D_Pull = 3*D_Push
+Features of the new Protocol(single topic only)
+- Two streams per peer: 
+  - Bitmap Stream: sends our set bitmap
+  - Data Stream: actually forwards the data
+- A peer has three states:
+  - Connected 
+  - Bitmap Mesh: 
+  - Push Mesh: 
+  
+The whole idea is that we reduce the Push Mesh to 1/2 and let the BitmapMesh transfer information to senders.
 
-- Keep sending messages out whenever the queue is empty. 
-    - Maintain D_Push sends in parallel. 
-    - When the Mesh is completely served, send items to peers in D_Pull. 
-    - This helps using the cloud node's bandwidth and keeps the home node's bandwidth as it is. 
-    - Send messages in size of 4kB(if possible)
+On the sending side: 
+  - Once we receive 20/30 attestations: we send out our bitmap update to all our BitmapMesh peers. 
+  - And just like in partial messages we send out data on the PushMesh every 20ms.
+  - Now if we have space in the sendqueue: 
+    - We see the least frequent item in our set. This is least frequent compared to the Bitmaps that we've received from our peers. And we push the message out.
 
-- On receiving an advertisement: fetch the item depending on how frequent the advertisements are. If
-  the advertisements are few, fetch the piece.
+On the receiving side:
+  - Once we recieve 20/30 attestations: we send out our bitmap update to all our BitmapMesh peers.
 
-- Every 500ms, do a sync with a couple of peers. A Sync tells the peers, send me everything you have
-  that I don't have. 
-    - Must be random to avoid eclipse attacks.  
-    - Can also be mitigated by keeping outbound connections in your pool. Though even this can be
-      gamed probably.
 
-## Topology
+## Protocol
 
-- We can keep the D_Push mesh entirely dependent on farther nodes.
-- Heavy D_Pull mesh with the closer nodes.   
+### Topology:
+Peers when connecting to other peers first try to fill up their PushMesh and then try to fill up their BitmapMesh. 
+1. Graft: PushMesh
+2. Graft: BitmapMesh
 
-## Will this improve the situation? 
+On receiving: Graft: PushMesh
+  - if there's a slot available, we graft it. Dlow -> Dhigh
+  - otherwise: if there's a slot in BitmapMesh send a Prune: BitmapMesh
+  - if there's no slot in bitmap mesh: send prune: Full 
 
-- There's a priority over the sends. For every message in our outbound queue: 
-    - (topic_id, msg_id) => priority
-- We keep 10 outbound items going in parallel.  
-    - This is tricky to decide. For a supernode, the 10 outbound in parallel might be too small. 
-    - For a home node the 10 outbound in parallel, might be too much. 
-    - 1Gbit/s => 50 Homenodes saturated. 
-    - 
+On receiving: Graft: BitmapMesh
+  - if there's a slot in bitmap mesh, graft it to bitmap mesh. DBitmap low -> DBitmap High
+  - if there's no slot in the bitmap mesh, send a Prune:
 
+Prunes have backoff just like in gossipsub. You'll have to handle backoff for both push and bitmap here. A prune full is backoff for both push and bitmap.
+
+
+### Sending messages: Push Mesh
+There's a tick that goes on every TICK_INTERVAL: 20ms as partial messages. 
+Here simply push the highest priority message that you have for the peer to the queue. 
+The Send Queue will tick back when there aren't enough messages for our push mesh peers in the queue. On receiving this ping, enqueue the next highest priority message to the PR. This priority is decided based on the partial priority logic.  
+The SendQueue will provide a method like AllFreeMeshPeers
+
+### Sending messages: Extra
+If we've already *sent* all the messages pending for push mesh and there are slots in the send queues:
+Push the least frequent message that we have to one of the bitmap peers. Repeat this process till we have some slots in the send queues. Here the SendQueue will provied a method AllFreeBitmapPeers
+
+
+### Send Queue: 
+This is where the process gets much better than gossipsub. We don't just queue all messages to the peer. What we do is that we have a PeerSender.  
+This peer sender ensures:
+0. Bitmap only messages are sent out immediately. 
+1. All mesh peers are prioritised when sending messages
+2. When a data message is being sent to the push mesh peers, we wait before enqueuing another message to the queue. 
+3. When a push mesh data send completes, if there's another push mesh data send still enqueued, we send that first. 
+4. Once there are no outstanding push mesh data sends, we pick up a data message that we have for bitmap peer. If we have no such data messages for the bitmap peer, we ping the main control loop to provide us with some message.
+5. At a time we aim to have only D parallel data sends happening. (Maybe we should make it 2*D? Keep it configurable)
+
+- Here the send *completes* when the write to the libp2p stream ends. So that we can make another write on the wire.

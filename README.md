@@ -195,7 +195,7 @@ other tunable is optional — leave it unset (or 0) to take the protocol default
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `attprop_push_dlow` / `attprop_push_d` / `attprop_push_dhigh` | 4 / 5 / 5 | push-mesh sizes (low = top-up trigger, D = high = hard cap) |
-| `attprop_bitmap_low` / `attprop_bitmap_target` / `attprop_bitmap_high` | 14 / 16 / 16 | bitmap-mesh sizes |
+| `attprop_bitmap_dlow` / `attprop_bitmap_d` / `attprop_bitmap_dhigh` | 14 / 16 / 16 | bitmap-mesh sizes |
 | `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |
 | `attprop_max_peers_per_att` | 30 | per-position lifetime peer ceiling (set generously ≥ D) |
 | `attprop_tick_interval_ms` | 20 | send tick |
