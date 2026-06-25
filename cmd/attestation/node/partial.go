@@ -552,9 +552,7 @@ func getAttestationMetadata(
 	includeAvailable bool,
 ) *pb.CommitteeAttestationPartsMetadata {
 	md := &pb.CommitteeAttestationPartsMetadata{
-		Slot:                int32(slot),
-		AttestationData:     b.data,
-		AttestationDataHash: b.dataHash,
+		Slot: int32(slot),
 	}
 
 	if includeAvailable && len(b.validated) > 0 {

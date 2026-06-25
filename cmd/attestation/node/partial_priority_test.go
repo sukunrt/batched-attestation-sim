@@ -167,6 +167,31 @@ func testBatchLabel(batch *pb.BatchedAttestation) string {
 	}
 }
 
+func TestPriorityMetadataSendsFullDataOncePerPeer(t *testing.T) {
+	m := newPriorityUnitManager(t)
+	b := newAttestationState([]byte("d"))
+	b.validated[0] = struct{}{}
+	p := peer.ID("p0")
+
+	first := getAttestationMetadata(b, testCommitteeSize, 1, nil, true)
+	require.NotNil(t, first)
+	m.setMetadataIdentityForPeer(p, b, first)
+	require.Equal(t, []byte("d"), first.AttestationData)
+	require.Empty(t, first.AttestationDataHash)
+
+	second := getAttestationMetadata(b, testCommitteeSize, 1, nil, true)
+	require.NotNil(t, second)
+	m.setMetadataIdentityForPeer(p, b, second)
+	require.Empty(t, second.AttestationData)
+	require.Equal(t, b.dataHash, second.AttestationDataHash)
+
+	otherPeer := getAttestationMetadata(b, testCommitteeSize, 1, nil, true)
+	require.NotNil(t, otherPeer)
+	m.setMetadataIdentityForPeer(peer.ID("p1"), b, otherPeer)
+	require.Equal(t, []byte("d"), otherPeer.AttestationData)
+	require.Empty(t, otherPeer.AttestationDataHash)
+}
+
 // -----------------------------------------------------------------------------
 // (1) Priority order — least-forwarded positions go out first, chunked at N.
 // -----------------------------------------------------------------------------

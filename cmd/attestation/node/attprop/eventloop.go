@@ -459,7 +459,7 @@ func (m *Manager) selectForPeer(
 	maxHolderCount int,
 ) (map[string][]int, *slotState) {
 	for _, ss := range m.slots {
-		chunk, held := ss.selectOneChunkForPeer(
+		chunk, _ := ss.selectOneChunkForPeer(
 			p,
 			m.cfg.MaxAttsPerMessage,
 			allowPartial,
@@ -467,9 +467,6 @@ func (m *Manager) selectForPeer(
 		)
 		if chunk != nil {
 			return chunk, ss
-		}
-		if held {
-			return nil, nil
 		}
 	}
 	return nil, nil

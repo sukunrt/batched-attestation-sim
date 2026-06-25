@@ -52,15 +52,10 @@ type countLevel struct {
 }
 
 func (l *countLevel) add(bucketKey string, pos int) {
-	if l.entries == nil {
-		l.entries = make(map[string]map[int]struct{})
+	if l.entries[bucketKey] == nil {
+		l.entries[bucketKey] = make(map[int]struct{})
 	}
-	positions := l.entries[bucketKey]
-	if positions == nil {
-		positions = make(map[int]struct{})
-		l.entries[bucketKey] = positions
-	}
-	positions[pos] = struct{}{}
+	l.entries[bucketKey][pos] = struct{}{}
 }
 
 // remove deletes e and reports whether it was present (so callers can move an
@@ -131,17 +126,21 @@ func newBucket(data []byte, hash []byte) *bucket {
 // maxPeers levels. The index grows if holder counts exceed that initial size.
 // committeeSize sizes the per-peer available bitmaps.
 func newSlotState(slot, maxPeers, committeeSize int) *slotState {
+	levels := make([]countLevel, maxPeers)
+	for i := range levels {
+		levels[i].entries = make(map[string]map[int]struct{})
+	}
 	return &slotState{
 		slot:          slot,
 		committeeSize: committeeSize,
 		buckets:       make(map[string]*bucket),
-		levels:        make([]countLevel, maxPeers),
+		levels:        levels,
 	}
 }
 
 func (ss *slotState) ensureLevel(k int) {
 	for len(ss.levels) <= k {
-		ss.levels = append(ss.levels, countLevel{})
+		ss.levels = append(ss.levels, countLevel{entries: make(map[string]map[int]struct{})})
 	}
 }
 

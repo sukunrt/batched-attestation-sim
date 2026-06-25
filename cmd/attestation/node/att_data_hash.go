@@ -86,8 +86,10 @@ func markPeerSentFull(sent map[peer.ID]map[string]struct{}, p peer.ID, hash []by
 func setBatchIdentity(batch *pb.BatchedAttestation, b *AttestationState, includeFullData bool) {
 	if includeFullData && len(b.data) > 0 {
 		batch.AttestationData = b.data
+		batch.AttestationDataHash = nil
 		return
 	}
+	batch.AttestationData = nil
 	batch.AttestationDataHash = b.dataHash
 }
 
@@ -98,7 +100,9 @@ func setMetadataIdentity(
 ) {
 	if includeFullData && len(b.data) > 0 {
 		md.AttestationData = b.data
+		md.AttestationDataHash = nil
 		return
 	}
+	md.AttestationData = nil
 	md.AttestationDataHash = b.dataHash
 }
