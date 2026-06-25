@@ -85,6 +85,17 @@ SLOT_START_PAT = re.compile(r'msg="starting slot".*?\bslot=(\d+)')
 SLOT_END_PAT = re.compile(r'msg="slot complete".*?\bslot=(\d+)')
 
 
+def int_field(line: str, key: str) -> int:
+    start = line.find(key)
+    if start < 0:
+        return 0
+    start += len(key)
+    end = start
+    while end < len(line) and line[end].isdigit():
+        end += 1
+    return int(line[start:end]) if end > start else 0
+
+
 def load_topology(exp_dir: Path) -> dict:
     topo = json.loads((exp_dir / "topology.json").read_text())
     fanout = set(topo.get("fanout_nodes", []))
@@ -95,7 +106,11 @@ def load_topology(exp_dir: Path) -> dict:
     return {"fanout": fanout, "super_mesh": super_mesh, "regular_mesh": regular_mesh}
 
 
-def parse_node_stderr(stderr_path: Path, last_slot: int, parse_bw: bool = False):
+def parse_node_stderr(
+    stderr_path: Path,
+    last_slot: int,
+    parse_bw: bool = False,
+):
     """Return (received_records, bw_stats), scoped to the LAST slot only.
 
     We stream the stderr in order and only accumulate between this node's
@@ -123,6 +138,7 @@ def parse_node_stderr(stderr_path: Path, last_slot: int, parse_bw: bool = False)
     ihave_recv = 0
     iwant_recv = 0
     md_recv = 0
+    ctrl_recv = 0
     in_window = False
     with open(stderr_path) as f:
         for line in f:
@@ -196,6 +212,17 @@ def parse_node_stderr(stderr_path: Path, last_slot: int, parse_bw: bool = False)
                 if gm:
                     iwant_recv += int(gm.group(1))
                     continue
+                if "attprop_data_received" in line:
+                    att_recv += int_field(line, "att_count=")
+                    att_data_recv += int_field(line, "att_data_bytes=")
+                    sig_recv += int_field(line, "sig_bytes=")
+                    continue
+                if "attprop_metadata_received" in line:
+                    md_recv += int_field(line, "bytes=")
+                    continue
+                if "attprop_control_received" in line:
+                    ctrl_recv += int_field(line, "bytes=")
+                    continue
     bw = None
     if parse_bw and (sent_top is not None or sent_base is not None):
         base_s = sent_base or 0
@@ -213,6 +240,7 @@ def parse_node_stderr(stderr_path: Path, last_slot: int, parse_bw: bool = False)
             "ihave_recv": ihave_recv,
             "iwant_recv": iwant_recv,
             "md_recv": md_recv,
+            "ctrl_recv": ctrl_recv,
         }
     return records, bw
 
@@ -279,15 +307,16 @@ def analyze_run(run_dir: Path, topo: dict, num_samples: int = 10,
 
     def class_bw(nodes: list[int]) -> dict:
         keys = ["sent_total", "recv_total", "att_data_recv", "sig_recv",
-                "att_recv", "ihave_recv", "iwant_recv", "md_recv"]
+                "att_recv", "ihave_recv", "iwant_recv", "md_recv", "ctrl_recv"]
         if not nodes:
             d = {k: 0.0 for k in keys}
         else:
             d = {k: sum(node_bw[n][k] for n in nodes) / len(nodes) for k in keys}
-        # Control received = IHAVE+IWANT in classic, parts metadata in the
-        # partial variants and att_propagation (no IHAVE/IWANT — control comes
-        # from the parts metadata / bitmap blobs).
-        if mode in ("partial", "partial-priority", "att-propagation"):
+        # Control received = IHAVE+IWANT in classic, parts metadata in partial
+        # modes, and bitmap/control stream frames in att_propagation.
+        if mode == "att-propagation":
+            d["control_recv"] = d["md_recv"] + d["ctrl_recv"]
+        elif mode in ("partial", "partial-priority"):
             d["control_recv"] = d["md_recv"]
         else:
             d["control_recv"] = d["ihave_recv"] + d["iwant_recv"]
@@ -331,7 +360,10 @@ def main():
 
     modes = sorted({m for m, _t in results})
     tiers = {t for _m, t in results}
+    if not results:
+        raise SystemExit("no analyzable runs found")
 
+    printed = False
     if "tiered" in tiers and "uniform" in tiers:
         # tiered-D vs uniform-D within each mode (uniform is the baseline).
         for mode in modes:
@@ -340,9 +372,10 @@ def main():
             if base and tiered:
                 print(f"=== {mode}: uniform-D vs tiered-D ===\n")
                 print_comparison(base, f"{mode}/uniform", tiered, f"{mode}/tiered")
+                printed = True
     else:
         # Single-tier experiment: compare classic against each non-classic mode
-        # present (partial and/or partial-priority).
+        # present (partial, partial-priority, and/or att-propagation).
         tier = next(iter(tiers), None)
         classic = results.get(("classic", tier))
         for mode in modes:
@@ -351,6 +384,12 @@ def main():
             other = results.get((mode, tier))
             if classic and other:
                 print_comparison(classic, "classic", other, mode)
+                printed = True
+
+    if not printed:
+        for (mode, tier), res in sorted(results.items()):
+            label = mode if len(tiers) == 1 else f"{mode}/{tier}"
+            print_single_run(res, label)
 
 
 def print_table(title: str, headers: list[str], rows: list[list[str]]):
@@ -389,6 +428,38 @@ def data_share(d: dict) -> float:
     attestation and per duplicate); low for partial (data deduped per bucket)."""
     denom = d["att_data_recv"] + d["sig_recv"] + d["control_recv"]
     return (d["att_data_recv"] / denom * 100) if denom else 0.0
+
+
+def print_single_run(run: dict, label: str):
+    """Print one run when there is no baseline to compare against."""
+    pcts = [25, 50, 95, 99]
+    vals = [np.percentile(run["t95"], p) for p in pcts]
+    headers = ["variant"] + [f"p{p}" for p in pcts]
+    rows = [[label] + [f"{v:.0f}" for v in vals]]
+    ls = run["last_slot"]
+    print_table(f"Latency: time-to-receive-95% (ms) — last slot ({ls}) only", headers, rows)
+
+    cols = [
+        ("sent (MB)", "sent_total", 1e6),
+        ("recv (MB)", "recv_total", 1e6),
+        ("att_data (KB)", "att_data_recv", 1e3),
+        ("sig (KB)", "sig_recv", 1e3),
+        ("control (KB)", "control_recv", 1e3),
+        ("att recv", "att_recv", 1.0),
+    ]
+    nt = run["num_topics"]
+    for class_label, key in [("super", "super_bw"), ("regular", "regular_bw")]:
+        bw = run[key]
+        headers = ["variant"] + [h for h, _, _ in cols] + ["att_data %"]
+        row = [label] + [f"{bw[k]/nt/unit:.2f}" for _, k, unit in cols] + [
+            f"{data_share(bw):.1f}%"
+        ]
+        print_table(
+            f"Received wire composition — {class_label} (last slot ({ls}) only; "
+            f"mean per sampled mesh node, per topic; assumes equal usage across {nt} topics)",
+            headers,
+            [row],
+        )
 
 
 def print_comparison(a: dict, label_a: str, b: dict, label_b: str):

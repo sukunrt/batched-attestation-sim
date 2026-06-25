@@ -204,15 +204,16 @@ other tunable is optional — leave it unset (or 0) to take the protocol default
 | `attprop_heartbeat_interval_ms` | 700 | mesh-maintenance heartbeat |
 | `attprop_prune_backoff_seconds` | 60 | backoff after a prune before re-grafting |
 
-`analysis/prelim-analysis.py` labels this mode `att-propagation`.
+`analysis/prelim-analysis.py` labels this mode `att-propagation` and parses its native
+`attprop_*_received` wire-accounting logs for the received-byte split.
 
 ## Analysis
 
 `analysis/prelim-analysis.py <run-or-experiment-dir>` prints time-to-receive latency percentiles
 and a received-bytes breakdown (attestation data, signatures, and control), scoped to the last
 slot. With a single mesh degree it compares classic against each non-classic mode present (partial,
-partial-priority, and/or att-propagation); when an experiment mixes tiered-D and uniform-D variants
-it compares uniform-D vs tiered-D within each mode.
+partial-priority, and/or att-propagation); with no baseline it prints standalone run tables. When an
+experiment mixes tiered-D and uniform-D variants it compares uniform-D vs tiered-D within each mode.
 
 `analysis/plot_arrival_latency_cdf.py` (single node, classic vs partial vs partial-priority) and
 `analysis/plot_arrival_delays_cdf.py` (sim vs mainnet) write arrival-delay CDF plots to `graphs/`.

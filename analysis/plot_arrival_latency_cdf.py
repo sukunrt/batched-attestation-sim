@@ -32,6 +32,8 @@ PARTIAL_PAT = re.compile(
 
 def run_mode(run_dir: Path) -> str:
     sim = yaml.safe_load((run_dir / "config.yaml").read_text())["simulation"]
+    if sim.get("att_propagation"):
+        return "att-propagation"
     if sim.get("partial_priority"):
         return "partial-priority"
     return "partial" if sim.get("use_partial_messages") else "classic"
@@ -49,9 +51,13 @@ def latencies(stderr: Path, pat: re.Pattern, topic: int, slot: int) -> list[int]
 
 def run_latencies(run_dir: Path, node: int, topic: int, slot: int) -> list[int] | None:
     """Sorted arrival latencies for one node/topic/slot, parsed with the
-    classic or partial pattern depending on the run's mode. partial-priority
-    emits the same partial_received lines as partial."""
-    pat = PARTIAL_PAT if run_mode(run_dir) in ("partial", "partial-priority") else CLASSIC_PAT
+    classic or partial pattern depending on the run's mode. partial-priority and
+    att-propagation emit the same partial_received lines as partial."""
+    pat = PARTIAL_PAT if run_mode(run_dir) in (
+        "partial",
+        "partial-priority",
+        "att-propagation",
+    ) else CLASSIC_PAT
     stderr = next((run_dir / "shadow.data" / "hosts" / f"node{node}").glob("*.stderr"), None)
     if stderr is None:
         print(f"no stderr for node {node} in {run_dir.name}")
@@ -61,7 +67,12 @@ def run_latencies(run_dir: Path, node: int, topic: int, slot: int) -> list[int] 
 
 # Stable colors for the auto classic/partial/partial-priority overlay; extra
 # runs cycle the palette.
-MODE_COLORS = {"classic": "#c0392b", "partial": "#2471a3", "partial-priority": "#27ae60"}
+MODE_COLORS = {
+    "classic": "#c0392b",
+    "partial": "#2471a3",
+    "partial-priority": "#27ae60",
+    "att-propagation": "#8e44ad",
+}
 PALETTE = ["#c0392b", "#2471a3", "#27ae60", "#8e44ad", "#d35400", "#16a085"]
 
 

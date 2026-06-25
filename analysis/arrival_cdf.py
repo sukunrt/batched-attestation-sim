@@ -65,6 +65,8 @@ def pick_node(exp_dir: Path, country: str | None, rng: random.Random) -> int:
 
 def run_mode(run_dir: Path) -> str:
     sim = yaml.safe_load((run_dir / "config.yaml").read_text())["simulation"]
+    if sim.get("att_propagation"):
+        return "att-propagation"
     if sim.get("partial_priority"):
         return "partial-priority"
     return "partial" if sim.get("use_partial_messages") else "classic"
@@ -75,8 +77,8 @@ def node_latencies(run_dir: Path, node: int, committee: int, slot: int) -> np.nd
     sf = next(Path(f"{run_dir}/shadow.data/hosts/node{node}").glob("*.stderr"), None)
     if sf is None:
         return np.array([])
-    # partial-priority emits the same partial_received lines as partial.
-    is_partial = mode in ("partial", "partial-priority")
+    # partial-priority and att-propagation emit the same partial_received lines as partial.
+    is_partial = mode in ("partial", "partial-priority", "att-propagation")
     pat = PARTIAL_PAT if is_partial else CLASSIC_PAT
     lat_idx = 4 if is_partial else 3
     out = [int(m.group(lat_idx)) for ln in open(sf, errors="replace")
@@ -134,7 +136,8 @@ def main():
     # Our sim — bold black, solid=classic, dashed=partial, dotted=partial-priority.
     styles = {"classic": dict(color="black", lw=2.6, ls="-"),
               "partial": dict(color="black", lw=2.6, ls="--"),
-              "partial-priority": dict(color="black", lw=2.6, ls=":")}
+              "partial-priority": dict(color="black", lw=2.6, ls=":"),
+              "att-propagation": dict(color="black", lw=2.6, ls="-.")}
     for rd in runs:
         mode = run_mode(rd)
         lat = node_latencies(rd, node, args.committee, args.slot)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/bits"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -206,6 +207,7 @@ func (m *Manager) readLoop(
 			m.post(peerDownEvent{peer: from})
 			return
 		}
+		m.logReceivedFrame(from, kind, b, ev)
 		if !m.post(ev) {
 			// ctx cancelled; stop reading.
 			s.Reset()
@@ -218,6 +220,83 @@ func (m *Manager) readLoop(
 		default:
 		}
 	}
+}
+
+func (m *Manager) logReceivedFrame(from peer.ID, kind streamKind, b []byte, ev event) {
+	switch kind {
+	case kindPush:
+		e, ok := ev.(inboundDataEvent)
+		if !ok || e.env == nil {
+			return
+		}
+		dataBatches, attCount, attDataBytes, sigBytes := attpropDataStats(e.env)
+		m.logger.Info("attprop_data_received",
+			"peer", shortPeer(from),
+			"topic", m.cfg.TopicIndex,
+			"bytes", len(b),
+			"data_batches", dataBatches,
+			"att_count", attCount,
+			"att_data_bytes", attDataBytes,
+			"sig_bytes", sigBytes,
+		)
+	case kindBitmap:
+		e, ok := ev.(inboundBitmapEvent)
+		if !ok || e.ctrl == nil {
+			return
+		}
+		metaCount, availableOnes := attpropMetadataStats(e.ctrl)
+		m.logger.Info("attprop_metadata_received",
+			"peer", shortPeer(from),
+			"topic", m.cfg.TopicIndex,
+			"bytes", len(b),
+			"meta_count", metaCount,
+			"available_ones", availableOnes,
+		)
+	case kindControl:
+		e, ok := ev.(inboundControlEvent)
+		if !ok || e.ctrl == nil {
+			return
+		}
+		m.logger.Info("attprop_control_received",
+			"peer", shortPeer(from),
+			"topic", m.cfg.TopicIndex,
+			"bytes", len(b),
+			"items", len(e.ctrl.Items),
+		)
+	}
+}
+
+func attpropDataStats(env *pb.BatchedAttestationEnvelope) (
+	dataBatches int,
+	attCount int,
+	attDataBytes int,
+	sigBytes int,
+) {
+	for _, batch := range env.Batches {
+		if batch == nil {
+			continue
+		}
+		dataBatches++
+		attDataBytes += len(batch.AttestationData)
+		attCount += len(batch.Signatures)
+		for _, sig := range batch.Signatures {
+			sigBytes += len(sig)
+		}
+	}
+	return dataBatches, attCount, attDataBytes, sigBytes
+}
+
+func attpropMetadataStats(ctrl *pb.ControlEnvelope) (metaCount int, availableOnes int) {
+	for _, md := range ctrl.Metadatas {
+		if md == nil {
+			continue
+		}
+		metaCount++
+		for _, b := range md.Available {
+			availableOnes += bits.OnesCount8(b)
+		}
+	}
+	return metaCount, availableOnes
 }
 
 // decodeFrame unmarshals one frame into the inbound event for its stream kind.

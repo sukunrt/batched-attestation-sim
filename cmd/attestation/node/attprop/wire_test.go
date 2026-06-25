@@ -1,12 +1,14 @@
 package attprop
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -96,6 +98,58 @@ func newTestManager(h host.Host) *Manager {
 		Topic:      "/eth2/topic0",
 		TopicIndex: 0,
 	})
+}
+
+func TestLogReceivedFrameAccounting(t *testing.T) {
+	var buf bytes.Buffer
+	m := &Manager{
+		logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{})),
+		cfg:    Config{TopicIndex: 7},
+	}
+	from := testPeerID(1)
+	dataEnv := &pb.BatchedAttestationEnvelope{Batches: []*pb.BatchedAttestation{{
+		AttestationData: []byte{1, 2, 3},
+		AttestorIndices: []uint32{1, 2},
+		Signatures:      [][]byte{{4, 5}, {6, 7, 8}},
+	}}}
+	dataFrame, err := proto.Marshal(dataEnv)
+	require.NoError(t, err)
+	m.logReceivedFrame(from, kindPush, dataFrame, inboundDataEvent{from: from, env: dataEnv})
+
+	bmEnv := &pb.ControlEnvelope{Metadatas: []*pb.CommitteeAttestationPartsMetadata{{
+		Slot:            3,
+		AttestationData: []byte{9},
+		Available:       []byte{0b10110000},
+	}}}
+	bmFrame, err := proto.Marshal(bmEnv)
+	require.NoError(t, err)
+	m.logReceivedFrame(from, kindBitmap, bmFrame, inboundBitmapEvent{from: from, ctrl: bmEnv})
+
+	ctrlEnv := &pb.AttPropControl{Items: []*pb.AttPropControlItem{{
+		Op:   pb.AttPropMeshOp_GRAFT,
+		Mesh: pb.AttPropMesh_PUSH,
+	}}}
+	ctrlFrame, err := proto.Marshal(ctrlEnv)
+	require.NoError(t, err)
+	m.logReceivedFrame(from, kindControl, ctrlFrame, inboundControlEvent{from: from, ctrl: ctrlEnv})
+
+	log := buf.String()
+	require.Contains(t, log, "msg=attprop_data_received")
+	require.Contains(t, log, "bytes="+fmt.Sprint(len(dataFrame)))
+	require.Contains(t, log, "data_batches=1")
+	require.Contains(t, log, "att_count=2")
+	require.Contains(t, log, "att_data_bytes=3")
+	require.Contains(t, log, "sig_bytes=5")
+
+	require.Contains(t, log, "msg=attprop_metadata_received")
+	require.Contains(t, log, "bytes="+fmt.Sprint(len(bmFrame)))
+	require.Contains(t, log, "meta_count=1")
+	require.Contains(t, log, "available_ones=3")
+
+	require.Contains(t, log, "msg=attprop_control_received")
+	require.Contains(t, log, "bytes="+fmt.Sprint(len(ctrlFrame)))
+	require.Contains(t, log, "items=1")
+	require.False(t, strings.Contains(log, "attprop_recv_batch"))
 }
 
 // waitEvent drains the next event of the wanted concrete type off a manager's

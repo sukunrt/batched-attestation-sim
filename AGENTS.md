@@ -251,11 +251,13 @@ directly) — they have **no** CLI flags. The Go batch verifier was extracted in
 `cmd/attestation/verify` package, reused by the partial strategies (package `node`) and each
 topic-local att_propagation manager (`cmd/attestation/node/attprop`).
 
-att_propagation **reuses the partial-mode log/wire keys** — it logs `partial_received`,
-`partial_recv_batch`, `attestation_validated`, etc. via the same `SlogTracer.OnPartialReceive`
-path — so `analysis/prelim-analysis.py` needs no regex changes. Mode detection labels it
-`att-propagation` (the first/most-specific branch), and its control bytes are accounted from
-metadata like the partial variants (no IHAVE/IWANT).
+att_propagation reuses the partial-mode app-level receive keys — it logs `partial_received`,
+`partial_recv_batch`, `partial_recv_metadata`, `attestation_validated`, etc. via the same
+`SlogTracer.OnPartialReceive` path — and adds native wire-accounting keys from the stream reader:
+`attprop_data_received`, `attprop_metadata_received`, and `attprop_control_received`. Mode
+detection labels it `att-propagation` (the first/most-specific branch). `analysis/prelim-analysis.py`
+parses the attprop wire keys for exact att_data/signature/control byte split and can print a
+standalone attprop-only run when no classic baseline is present.
 
 ### Partial-mode log keys
 
