@@ -233,29 +233,22 @@ func (m *Manager) dispatch(ev event) {
 	switch e := ev.(type) {
 	case peerUpEvent:
 		m.onPeerUp(e)
-		m.trySelectAndSend()
 	case peerDownEvent:
 		m.onPeerDown(e)
 	case inboundControlEvent:
 		m.onInboundControl(e.from, e.ctrl)
 	case inboundBitmapEvent:
 		m.onInboundBitmap(e.from, e.ctrl)
-		m.trySelectAndSend()
 	case inboundDataEvent:
 		m.onInboundData(e.from, e.env)
-		m.trySelectAndSend()
 	case validatedEvent:
 		m.onValidated(e)
-		m.trySelectAndSend()
 	case publishLocalEvent:
 		m.onPublishLocal(e)
-		m.trySelectAndSend()
 	case funcEvent:
 		e.fn()
-		m.trySelectAndSend()
 	case sendDoneEvent:
 		m.onSendDone(e.peer)
-		m.trySelectAndSend()
 	case tickEvent:
 		m.onTick()
 	case bitmapFloorEvent:
@@ -263,6 +256,7 @@ func (m *Manager) dispatch(ev event) {
 	case heartbeatEvent:
 		m.onHeartbeat()
 	}
+	m.trySelectAndSend()
 }
 
 // shutdown closes every per-peer writer so the sender goroutines exit their
@@ -336,13 +330,11 @@ func (m *Manager) onSendDone(p peer.ID) {
 	}
 }
 
-// onTick runs the tick selection pass: while sendAllToPushMesh is true, partial
-// push batches flush too (§F4). The flag is eventloop-local — set, consumed in
-// the same synchronous pass, and reset — never observed across a channel hop.
+// onTick starts a push-drain pass: partial push batches flush too (§F4), and
+// keep flushing across send completions until no push peer has sendable data.
 func (m *Manager) onTick() {
 	m.sendAllToPushMesh = true
 	m.trySelectAndSend()
-	m.sendAllToPushMesh = false
 }
 
 // onHeartbeat runs mesh maintenance: gather connected candidates, call the mesh
@@ -422,21 +414,32 @@ func (m *Manager) onInboundControl(from peer.ID, ctrl *pb.AttPropControl) {
 // activeData < B.
 //
 //  1. Push, exempt from B: for each push peer with no in-flight send, select its
-//     scarcest ≤ N chunk. A full chunk (N items) is sent immediately; a partial
-//     chunk is selected only on the tick flush (sendAllToPushMesh).
+//     scarcest <= N chunk. A full chunk (N items) is sent immediately; a partial
+//     chunk is selected only while draining after a tick (sendAllToPushMesh).
 //  2. Bitmap, gated: for each bitmap peer with no in-flight send while
 //     activeData < B, send its scarcest chunk, but only from holder-count levels
 //     below pushPeers + bitmapPeers/2.
 func (m *Manager) trySelectAndSend() {
+	pushDrained := true
 	for p, s := range m.senders {
-		if s.inFlight || m.mesh.role(p) != rolePush {
+		if m.mesh.role(p) != rolePush {
+			continue
+		}
+		if s.inFlight {
+			pushDrained = false
 			continue
 		}
 		chunk, ss := m.selectForPeer(p, m.sendAllToPushMesh, noHolderCountLimit)
 		if chunk == nil {
 			continue
 		}
+		pushDrained = false
 		m.send(p, ss, chunk)
+	}
+	// Once every push peer is idle and has no selectable chunk left, the tick's
+	// partial-push drain is complete.
+	if pushDrained && m.sendAllToPushMesh {
+		m.sendAllToPushMesh = false
 	}
 	push, bitmapPeers := m.mesh.counts()
 	bitmapHolderLimit := push + bitmapPeers/2
