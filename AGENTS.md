@@ -239,9 +239,9 @@ persistent bidirectional per-topic streams** — push (eager batched data), bitm
 advertisement), and control (graft/prune mesh maintenance) — rather than relying on gossipsub's
 IHAVE/IWANT. Each node owns one independent `attprop.Manager` per topic, keyed by topic name; each
 manager has its own eventloop, mesh, slot state, verifier, stream state, and send budget. Forwarding
-is driven by **holder-count scarcity**: a node prefers pushing the attestations the fewest of its
-peers are known to hold, throttled by the per-topic send budget `B` and the per-position lifetime
-ceiling `attprop_max_peers_per_att`.
+is driven by **holder-count scarcity**: push peers receive missing attestations regardless of holder
+count, while bitmap peers receive only entries with holder count below
+`pushPeers + bitmapPeers/2`, throttled by the per-topic send budget `B`.
 
 Mode bool plumbing mirrors `partial_priority`: simctl writes the `att_propagation` key (plus the
 `attprop_*` tunables and `max_attestations_per_message`) into `config.yaml` from the Pydantic model,

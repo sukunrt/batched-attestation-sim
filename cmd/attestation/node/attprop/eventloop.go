@@ -429,18 +429,21 @@ func (m *Manager) onInboundControl(from peer.ID, ctrl *pb.AttPropControl) {
 //     scarcest ≤ N chunk. A full chunk (N items) is sent immediately; a partial
 //     chunk is selected only on the tick flush (sendAllToPushMesh).
 //  2. Bitmap, gated: for each bitmap peer with no in-flight send while
-//     activeData < B, send its scarcest chunk.
+//     activeData < B, send its scarcest chunk, but only from holder-count levels
+//     below pushPeers + bitmapPeers/2.
 func (m *Manager) trySelectAndSend() {
 	for p, s := range m.senders {
 		if s.inFlight || m.mesh.role(p) != rolePush {
 			continue
 		}
-		chunk, ss := m.selectForPeer(p, m.sendAllToPushMesh)
+		chunk, ss := m.selectForPeer(p, m.sendAllToPushMesh, noHolderCountLimit)
 		if chunk == nil {
 			continue
 		}
 		m.send(p, ss, chunk)
 	}
+	push, bitmapPeers := m.mesh.counts()
+	bitmapHolderLimit := push + bitmapPeers/2
 	for p, s := range m.senders {
 		if m.activeData >= m.cfg.SendBudgetB {
 			break
@@ -448,7 +451,7 @@ func (m *Manager) trySelectAndSend() {
 		if s.inFlight || m.mesh.role(p) != roleBitmap {
 			continue
 		}
-		chunk, ss := m.selectForPeer(p, true)
+		chunk, ss := m.selectForPeer(p, true, bitmapHolderLimit)
 		if chunk == nil {
 			continue
 		}
@@ -458,11 +461,21 @@ func (m *Manager) trySelectAndSend() {
 
 // selectForPeer draws the peer's scarcest chunk from the active slots for this
 // manager's topic. If allowPartial is false, only full chunks are selected so
-// held push sends do not need to be rolled back. The draw commits holder-count
-// as it goes (§E2).
-func (m *Manager) selectForPeer(p peer.ID, allowPartial bool) (map[string][]int, *slotState) {
+// held push sends do not need to be rolled back. maxHolderCount bounds the
+// scanned holder-count levels when serving bitmap peers; push peers pass no
+// limit. The draw commits holder-count as it goes (§E2).
+func (m *Manager) selectForPeer(
+	p peer.ID,
+	allowPartial bool,
+	maxHolderCount int,
+) (map[string][]int, *slotState) {
 	for _, ss := range m.slots {
-		chunk, _, held := ss.selectOneChunkForPeer(p, m.cfg.MaxAttsPerMessage, allowPartial)
+		chunk, _, held := ss.selectOneChunkForPeer(
+			p,
+			m.cfg.MaxAttsPerMessage,
+			allowPartial,
+			maxHolderCount,
+		)
 		if chunk != nil {
 			return chunk, ss
 		}
@@ -723,7 +736,7 @@ func (m *Manager) getSlotState(slot int) *slotState {
 	return m.slots[slot]
 }
 
-// maxPeers returns the holder-count ceiling (= MaxPeersPerAtt), at least 1.
+// maxPeers returns the initial holder-count index capacity, at least 1.
 func (m *Manager) maxPeers() int {
 	if m.cfg.MaxPeersPerAtt > 0 {
 		return m.cfg.MaxPeersPerAtt

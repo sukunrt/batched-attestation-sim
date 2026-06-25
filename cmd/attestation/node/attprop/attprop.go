@@ -84,7 +84,7 @@ type Config struct {
 	BitmapDlow, BitmapD, BitmapDhigh int
 
 	// §F1 per-topic SendBudgetB (default 4), §F3 MaxAttsPerMessage N (default 30),
-	// §E3 MaxPeersPerAtt lifetime ceiling.
+	// and MaxPeersPerAtt as the initial holder-count index capacity.
 	SendBudgetB, MaxAttsPerMessage, MaxPeersPerAtt int
 
 	// §F4 TickInterval (20ms), §D2 BitmapFloorInterval (~100ms),

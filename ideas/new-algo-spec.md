@@ -120,8 +120,8 @@ Each section (A–H) lists decisions. `DECIDED:` = locked. `OPEN:` = still discu
 - E2 For a peer with a free send slot, pick the globally-scarcest position(s) that peer LACKS,
   send, then mark the peer as possessing them (holder-count++ each) so the next peer served sees
   the update — same "commit as drawn" spreading as partial-priority.
-- E3 Keep `max_peers_per_attestation` as an optional safety ceiling, but scarcity + the per-peer
-  "lacks" filter largely self-limit forwarding. Configurable.
+- E3 Push forwarding has no holder-count ceiling: push peers receive anything they lack. Bitmap
+  forwarding is gated to holder-count levels `< pushPeers + bitmapPeers/2`.
 
 **Index:** reuse partial-priority's count-bucketed index (`prioritySlotState` / `countLevel`) but
 key levels by **holder-count** instead of sendCount. holder-count[pos] = popcount over peers of
@@ -149,7 +149,8 @@ our send). Selection walks levels ascending (scarcest first). Deferred to F: mes
   congestion) → triggers the peer's next message.
 - F3 Message = **≤ N scarcest items the peer lacks** (N=30, configurable), scarcity-ordered,
   committed as drawn (holder-count++). **Push peers receive ALL our data** over time; **bitmap
-  peers receive the same scarcity-ordered chunks but only when a slot is free.**
+  peers receive scarce chunks only when a slot is free and holder-count level is below
+  `pushPeers + bitmapPeers/2`.**
 - F4 A single **eventloop** owns send selection. When a send slot frees, the per-peer sender
   signals "empty send space" and the eventloop picks the next message, **push-mesh first, then
   bitmap**:

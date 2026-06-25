@@ -44,6 +44,8 @@ type candidate struct {
 	pos       int
 }
 
+const noHolderCountLimit = -1
+
 // countLevel holds the entries currently at one holder-count value.
 type countLevel struct {
 	entries map[string]map[int]struct{}
@@ -101,8 +103,8 @@ type bucket struct {
 // slotState holds all buckets for a (topic, slot) plus a holder-count-ordered
 // index over their validated positions. levels[k] holds the entries whose
 // current holder-count == k; selection walks levels ascending (scarcest first).
-// Mirrors node/partial_priority.go's prioritySlotState but keyed by holder-count
-// instead of sendCount.
+// The index grows with observed holders so push peers can still receive items
+// above the bitmap-forwarding limit.
 type slotState struct {
 	slot          int
 	committeeSize int // wire-level bitmap capacity, for sizing per-peer available
@@ -127,9 +129,8 @@ func newBucket(data []byte) *bucket {
 	}
 }
 
-// newSlotState initialises a slot's state with a holder-count index sized for
-// levels [0, maxPeers). maxPeers is the MaxPeersPerAtt ceiling: a position held
-// by maxPeers peers is no longer scarce and drops out of the index (§E3).
+// newSlotState initialises a slot's state with a holder-count index pre-sized to
+// maxPeers levels. The index grows if holder counts exceed that initial size.
 // committeeSize sizes the per-peer available bitmaps.
 func newSlotState(slot, maxPeers, committeeSize int) *slotState {
 	return &slotState{
@@ -137,6 +138,12 @@ func newSlotState(slot, maxPeers, committeeSize int) *slotState {
 		committeeSize: committeeSize,
 		buckets:       make(map[string]*bucket),
 		levels:        make([]countLevel, maxPeers),
+	}
+}
+
+func (ss *slotState) ensureLevel(k int) {
+	for len(ss.levels) <= k {
+		ss.levels = append(ss.levels, countLevel{})
 	}
 }
 
@@ -181,29 +188,25 @@ func (b *bucket) addReceived(positions []int, signatures [][]byte) []any {
 }
 
 // indexAddValidated inserts a newly-validated position at its holder-count
-// level. A position already held by ≥ MaxPeersPerAtt peers is past the lifetime
-// ceiling and never a forwarding candidate, so it is skipped (§E3).
+// level.
 func (ss *slotState) indexAddValidated(bk string, pos, holderCount int) {
-	if holderCount >= len(ss.levels) {
-		return
-	}
+	ss.ensureLevel(holderCount)
 	ss.levels[holderCount].add(bk, pos)
 }
 
 // indexBumpHolder moves a validated entry from level `from` to `from+1` after a
 // peer's available bit for the position flipped 0→1 (via a received bitmap, a
-// peer's data send to us, or our send to them — §E1). Reaching MaxPeersPerAtt
-// drops the entry from the index. It is a no-op for positions not currently
-// indexed (e.g. a holder flip on a position still validating): only an entry
-// actually present in `from` is moved, so the index keeps holding only
-// validated positions.
+// peer's data send to us, or our send to them — §E1). It is a no-op for
+// positions not currently indexed (e.g. a holder flip on a position still
+// validating): only an entry actually present in `from` is moved, so the index
+// keeps holding only validated positions.
 func (ss *slotState) indexBumpHolder(bk string, pos, from int) {
 	if from >= len(ss.levels) || !ss.levels[from].remove(bk, pos) {
 		return
 	}
-	if to := from + 1; to < len(ss.levels) {
-		ss.levels[to].add(bk, pos)
-	}
+	to := from + 1
+	ss.ensureLevel(to)
+	ss.levels[to].add(bk, pos)
 }
 
 // markHolder records that peer p now holds position pos in bucket b: it sets the
@@ -228,22 +231,29 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 // selectOneChunkForPeer draws up to maxN of the scarcest positions peer p lacks,
 // ascending holder-count (scarcest first), then commits each draw via markHolder
 // so the next peer served in the same pass sees the updated holder-count — the
-// commit-as-drawn spreading of §E2. It returns the chunk as bucketKey->positions
-// in priority order (nil when the peer has nothing left to receive) plus `more`:
-// whether the peer needs additional positions we hold beyond this chunk. If
-// allowPartial is false, a non-full chunk is held by returning nil, held=true
-// before committing it.
+// commit-as-drawn spreading of §E2. maxHolderCount is an exclusive upper bound
+// on selected holder-count levels; noHolderCountLimit scans all levels. It
+// returns the chunk as bucketKey->positions in priority order (nil when the peer
+// has nothing left to receive within the limit) plus `more`: whether the peer
+// needs additional positions we hold beyond this chunk. If allowPartial is
+// false, a non-full chunk is held by returning nil, held=true before committing
+// it.
 //
 // Candidates are collected read-only per level first, then committed, so the
 // index mutation in markHolder can't perturb the in-progress scan. Entries in
-// ss.levels are validated and under the ceiling by construction.
+// ss.levels are validated by construction.
 func (ss *slotState) selectOneChunkForPeer(
 	p peer.ID,
 	maxN int,
 	allowPartial bool,
+	maxHolderCount int,
 ) (chunk map[string][]int, more bool, held bool) {
 	var drawn []candidate
-	for k := 0; k < len(ss.levels) && !more; k++ {
+	levelLimit := len(ss.levels)
+	if maxHolderCount >= 0 && maxHolderCount < levelLimit {
+		levelLimit = maxHolderCount
+	}
+	for k := 0; k < levelLimit && !more; k++ {
 		for bucketKey, positions := range ss.levels[k].entries {
 			b := ss.buckets[bucketKey]
 			if b == nil {

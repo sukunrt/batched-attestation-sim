@@ -180,8 +180,9 @@ default-off as a tool to revisit.
 `att_propagation` is a third forwarding mode that replaces GossipSub with a native libp2p protocol.
 Each peer connection keeps three persistent bidirectional per-topic streams — push (eager batched
 data), bitmap (periodic have-set advertisement), and control (mesh graft/prune) — and each topic
-runs an independent manager/eventloop with its own mesh, state, verifier, and send budget. It
-forwards by holder-count scarcity (prefer the attestations the fewest peers are known to hold).
+runs an independent manager/eventloop with its own mesh, state, verifier, and send budget. Push
+peers receive all missing attestations regardless of holder count; bitmap peers receive only scarce
+items with holder count below `pushPeers + bitmapPeers/2`.
 Enable it with:
 
 ```yaml
@@ -197,7 +198,7 @@ other tunable is optional — leave it unset (or 0) to take the protocol default
 | `attprop_push_dlow` / `attprop_push_d` / `attprop_push_dhigh` | 4 / 5 / 5 | push-mesh sizes (low = top-up trigger, D = high = hard cap) |
 | `attprop_bitmap_dlow` / `attprop_bitmap_d` / `attprop_bitmap_dhigh` | 14 / 16 / 16 | bitmap-mesh sizes |
 | `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |
-| `attprop_max_peers_per_att` | 30 | per-position lifetime peer ceiling (set generously ≥ D) |
+| `attprop_max_peers_per_att` | 30 | initial holder-count index capacity |
 | `attprop_tick_interval_ms` | 20 | send tick |
 | `attprop_bitmap_floor_interval_ms` | 100 | minimum spacing between bitmap advertisements |
 | `attprop_heartbeat_interval_ms` | 700 | mesh-maintenance heartbeat |

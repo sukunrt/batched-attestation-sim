@@ -138,6 +138,27 @@ func TestBudgetGateBitmapFillsSpare(t *testing.T) {
 	require.Equal(t, budgetB, m.activeData)
 }
 
+func TestPushIgnoresBitmapHolderLimit(t *testing.T) {
+	m := schedManager(t, 1, 4, 1000)
+	ss := m.getOrCreateSlotState(1)
+	b := ss.getOrCreateBucket([]byte("data"))
+	b.atts[1] = &attEntry{Position: 1, Signature: []byte{1}, Data: b.data}
+	b.validated[1] = struct{}{}
+	b.holderCount[1] = 3
+	ss.indexAddValidated(string(b.data), 1, b.holderCount[1])
+
+	m.addFakeSender(pid(1), rolePush)
+	m.addFakeSender(pid(2), rolePush)
+	m.addFakeSender(pid(101), roleBitmap)
+	m.addFakeSender(pid(102), roleBitmap)
+
+	m.trySelectAndSend()
+
+	push, bitmap := m.inFlightByRole()
+	require.Equal(t, 2, push, "push peers forward regardless of holder count")
+	require.Equal(t, 0, bitmap, "bitmap peers require level < push + bitmap/2")
+}
+
 func TestBudgetGatePerTopicManager(t *testing.T) {
 	const budgetB = 1
 	m0 := schedManagerForTopic(t, 0, "t0", 30, budgetB, 1000)
@@ -149,7 +170,9 @@ func TestBudgetGatePerTopicManager(t *testing.T) {
 	m0.seedValidated(1, pos...)
 	m1.seedValidated(1, pos...)
 	m0.addFakeSender(pid(10), roleBitmap)
+	m0.addFakeSender(pid(12), roleBitmap)
 	m1.addFakeSender(pid(11), roleBitmap)
+	m1.addFakeSender(pid(13), roleBitmap)
 
 	m0.trySelectAndSend()
 	m1.trySelectAndSend()
