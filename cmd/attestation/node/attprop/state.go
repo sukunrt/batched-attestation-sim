@@ -160,7 +160,7 @@ func (ss *slotState) getOrCreateBucket(data []byte, hashes ...[]byte) *bucket {
 	if len(hashes) > 0 {
 		hash = slices.Clone(hashes[0])
 	}
-	key := attestationHashKey(hash)
+	key := string(hash)
 	b, ok := ss.buckets[key]
 	if !ok {
 		b = newBucket(data, hash)
@@ -221,7 +221,7 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 	hc := b.holderCount[pos]
 	b.holderCount[pos] = hc + 1
 	// Only validated positions live in the index; bump is a no-op otherwise.
-	bk := attestationHashKey(b.dataHash)
+	bk := string(b.dataHash)
 
 	if hc >= len(ss.levels) || !ss.levels[hc].remove(bk, pos) {
 		return true
@@ -303,7 +303,7 @@ func encodeBatch(b *bucket, positions []int, includeFullData bool) *pb.BatchedAt
 		AttestorIndices: idxs,
 		Signatures:      sigs,
 	}
-	if includeFullData && len(b.data) > 0 {
+	if includeFullData {
 		batch.AttestationData = b.data
 	} else {
 		batch.AttestationDataHash = b.dataHash

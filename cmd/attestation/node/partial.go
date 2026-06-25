@@ -216,7 +216,7 @@ func (m *partialAttestationManager) getOrCreateAttestationStateByHash(
 	hash []byte,
 ) *AttestationState {
 	ss := m.getOrCreateSlotState(topic, slot)
-	key := attestationHashKey(hash)
+	key := string(hash)
 	b, ok := ss.attestationsMap[key]
 	if !ok {
 		b = newAttestationState(data, hash)
@@ -287,7 +287,7 @@ func (m *partialAttestationManager) markValidated(topic string, slot int, data [
 		return
 	}
 	hash := m.identities.remember(data)
-	b, ok := ss.attestationsMap[attestationHashKey(hash)]
+	b, ok := ss.attestationsMap[string(hash)]
 	if !ok {
 		return
 	}

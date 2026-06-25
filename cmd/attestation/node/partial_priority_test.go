@@ -101,7 +101,7 @@ func seedValidated(m *priorityAttestationManager, topic string, slot int, data [
 		}
 		b.validated[pos] = struct{}{}
 		b.sendCount[pos] = sc
-		ss.indexAddValidated(attestationHashKey(b.dataHash), pos, sc)
+		ss.indexAddValidated(string(b.dataHash), pos, sc)
 	}
 }
 
@@ -150,14 +150,14 @@ func intRange(start, n int) []int {
 }
 
 func testAttKey(data string) string {
-	return attestationHashKey(hashAttestationData([]byte(data)))
+	return string(hashAttestationData([]byte(data)))
 }
 
 func testBatchLabel(batch *pb.BatchedAttestation) string {
 	if len(batch.AttestationData) > 0 {
 		return string(batch.AttestationData)
 	}
-	switch attestationHashKey(batch.AttestationDataHash) {
+	switch string(batch.AttestationDataHash) {
 	case testAttKey("A"):
 		return "A"
 	case testAttKey("B"):

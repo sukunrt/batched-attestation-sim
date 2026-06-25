@@ -233,7 +233,7 @@ func expectAttestationInBucket(t *testing.T, n *Node, topic string, slot, from i
 	}
 	n.partial.mu.Lock()
 	defer n.partial.mu.Unlock()
-	b, ok := ss.attestationsMap[attestationHashKey(hashAttestationData(data))]
+	b, ok := ss.attestationsMap[string(hashAttestationData(data))]
 	if !ok {
 		t.Errorf("node %d: missing bucket for slot %d", n.Num, slot)
 		return false

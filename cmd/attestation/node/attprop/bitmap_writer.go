@@ -88,7 +88,7 @@ func (w *bitmapWriter) enqueueBitmaps(mds []*pb.CommitteeAttestationPartsMetadat
 		if !ok {
 			continue
 		}
-		key := bitmapKey{slot: md.Slot, hash: attestationHashKey(hash)}
+		key := bitmapKey{slot: md.Slot, hash: string(hash)}
 		queued := proto.Clone(md).(*pb.CommitteeAttestationPartsMetadata)
 		queued.AttestationDataHash = hash
 		if _, sent := w.sentFull[key.hash]; sent {

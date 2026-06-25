@@ -520,15 +520,18 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 	if m.sentFull == nil {
 		m.sentFull = make(map[peer.ID]map[string]struct{})
 	}
+	if _, ok := m.sentFull[p]; !ok {
+		m.sentFull[p] = make(map[string]struct{})
+	}
 	env := &pb.BatchedAttestationEnvelope{}
 	var total int
-	var sentFullDataHashes [][]byte
+	var sentFullData [][]byte
 	for bk := range chunk {
 		b := ss.buckets[bk]
-		includeFullData := !peerSentFull(m.sentFull, p, b.dataHash) && len(b.data) > 0
-		env.Batches = append(env.Batches, encodeBatch(b, chunk[bk], includeFullData))
-		if includeFullData {
-			sentFullDataHashes = append(sentFullDataHashes, b.dataHash)
+		_, sentFull := m.sentFull[p][string(b.dataHash)]
+		env.Batches = append(env.Batches, encodeBatch(b, chunk[bk], !sentFull))
+		if !sentFull {
+			sentFullData = append(sentFullData, b.dataHash)
 		}
 		total += len(chunk[bk])
 	}
@@ -552,8 +555,8 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 		return
 	}
 	s.inFlight = true
-	for _, hash := range sentFullDataHashes {
-		markPeerSentFull(m.sentFull, p, hash)
+	for _, hash := range sentFullData {
+		m.sentFull[p][string(hash)] = struct{}{}
 	}
 	m.activeData++
 	m.logger.Info("attprop_send_data",
@@ -672,7 +675,7 @@ func (m *Manager) onValidated(e validatedEvent) {
 		return
 	}
 	hash := m.identities.remember(e.data)
-	b, ok := ss.buckets[attestationHashKey(hash)]
+	b, ok := ss.buckets[string(hash)]
 	if !ok {
 		return
 	}
@@ -685,7 +688,7 @@ func (m *Manager) onValidated(e validatedEvent) {
 		}
 		delete(b.validating, pe.Position)
 		b.validated[pe.Position] = struct{}{}
-		ss.indexAddValidated(attestationHashKey(b.dataHash), pe.Position, b.holderCount[pe.Position])
+		ss.indexAddValidated(string(b.dataHash), pe.Position, b.holderCount[pe.Position])
 		ss.validatedSinceEmit++
 		m.logger.Info("attestation_validated",
 			"slot", e.slot,
@@ -719,7 +722,7 @@ func (m *Manager) onPublishLocal(e publishLocalEvent) {
 	}
 	b.atts[e.pos] = &attEntry{Position: e.pos, Signature: e.sig, Data: b.data}
 	b.validated[e.pos] = struct{}{}
-	ss.indexAddValidated(attestationHashKey(b.dataHash), e.pos, b.holderCount[e.pos])
+	ss.indexAddValidated(string(b.dataHash), e.pos, b.holderCount[e.pos])
 	ss.validatedSinceEmit++
 	m.logger.Info("self_published",
 		"slot", e.slot,
@@ -788,7 +791,7 @@ func chunkBucketKeys(chunk map[string][]int) []string {
 // holds a bucket for the live slot until its first push of that slot arrives, so
 // it would otherwise misfile every new slot under the last one it knows.
 func (m *Manager) slotForHash(hash []byte) int {
-	key := attestationHashKey(hash)
+	key := string(hash)
 	for slot, ss := range m.slots {
 		if _, ok := ss.buckets[key]; ok {
 			return slot

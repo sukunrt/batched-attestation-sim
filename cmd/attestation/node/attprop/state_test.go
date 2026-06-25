@@ -62,7 +62,7 @@ func levelLen(l countLevel) int {
 }
 
 func bucketKey(b *bucket) string {
-	return attestationHashKey(b.dataHash)
+	return string(b.dataHash)
 }
 
 const testCommittee = 64

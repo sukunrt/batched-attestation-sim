@@ -235,7 +235,7 @@ func TestEndToEndPushForward(t *testing.T) {
 			k := testPeerID(other)
 			require.False(t, h.manager(opener, 0).senders[k].inFlight)
 			ss := h.manager(opener, 0).getSlotState(1)
-			b := ss.buckets[attestationHashKey(hashAttestationData(data))]
+			b := ss.buckets[string(hashAttestationData(data))]
 			for _, pos := range []int{3, 8, 21} {
 				require.Equal(t, 1, b.holderCount[pos], "B recorded as holder")
 			}
@@ -308,7 +308,7 @@ func TestBitmapPlusKTrigger(t *testing.T) {
 		h.manager(other, 0).onLoop(func() {
 			ss := h.manager(other, 0).getSlotState(1)
 			require.NotNil(t, ss, "B learned the slot from the bitmap")
-			b := ss.buckets[attestationHashKey(hashAttestationData(data))]
+			b := ss.buckets[string(hashAttestationData(data))]
 			require.NotNil(t, b)
 			ones = b.peerAvail[testPeerID(opener)].OnesCount()
 		})
@@ -343,7 +343,7 @@ func TestBitmapFloorOnlyWhenChanged(t *testing.T) {
 		h.manager(other, 0).onLoop(func() {
 			ss := h.manager(other, 0).getSlotState(1)
 			require.NotNil(t, ss)
-			require.True(t, ss.buckets[attestationHashKey(hashAttestationData(data))].peerAvail[testPeerID(opener)].Get(5))
+			require.True(t, ss.buckets[string(hashAttestationData(data))].peerAvail[testPeerID(opener)].Get(5))
 		})
 
 		// A second floor with no new validations must skip (re-emit only if
@@ -351,7 +351,7 @@ func TestBitmapFloorOnlyWhenChanged(t *testing.T) {
 		// current validated bitmap.
 		h.manager(opener, 0).onLoop(func() {
 			ss := h.manager(opener, 0).getSlotState(1)
-			b := ss.buckets[attestationHashKey(hashAttestationData(data))]
+			b := ss.buckets[string(hashAttestationData(data))]
 			require.NotNil(t, b.lastEmitted, "first floor recorded lastEmitted")
 			require.Equal(t, []byte(b.lastEmitted), []byte(h.manager(opener, 0).validatedBitmap(b)))
 		})

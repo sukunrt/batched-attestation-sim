@@ -224,7 +224,7 @@ func getOrCreateBucket(ss *prioritySlotState, data []byte, hashes ...[]byte) *At
 	if len(hashes) > 0 {
 		hash = slices.Clone(hashes[0])
 	}
-	key := attestationHashKey(hash)
+	key := string(hash)
 	b, ok := ss.attestationsMap[key]
 	if !ok {
 		b = newAttestationState(data, hash)
@@ -269,7 +269,7 @@ func (m *priorityAttestationManager) publishLocal(topic string, slot, position i
 	}
 	b.validated[position] = struct{}{}
 	b.newSinceLastTick = true
-	ss.indexAddValidated(attestationHashKey(b.dataHash), position, b.sendCount[position])
+	ss.indexAddValidated(string(b.dataHash), position, b.sendCount[position])
 }
 
 // markValidated promotes positions from validating to validated after the batch
@@ -283,7 +283,7 @@ func (m *priorityAttestationManager) markValidated(topic string, slot int, data 
 		return
 	}
 	hash := m.identities.remember(data)
-	b, ok := ss.attestationsMap[attestationHashKey(hash)]
+	b, ok := ss.attestationsMap[string(hash)]
 	if !ok {
 		return
 	}
@@ -297,7 +297,7 @@ func (m *priorityAttestationManager) markValidated(topic string, slot int, data 
 		delete(b.validating, pe.Position)
 		b.validated[pe.Position] = struct{}{}
 		b.newSinceLastTick = true
-		ss.indexAddValidated(attestationHashKey(b.dataHash), pe.Position, b.sendCount[pe.Position])
+		ss.indexAddValidated(string(b.dataHash), pe.Position, b.sendCount[pe.Position])
 		latencyMs := now.Sub(slotStart).Milliseconds()
 		m.logger.Info("attestation_validated",
 			"slot", slot,

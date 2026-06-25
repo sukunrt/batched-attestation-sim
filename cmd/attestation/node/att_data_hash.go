@@ -17,10 +17,6 @@ func hashAttestationData(data []byte) []byte {
 	return slices.Clone(sum[:])
 }
 
-func attestationHashKey(hash []byte) string {
-	return string(hash)
-}
-
 func attDigestHexFromHash(hash []byte) string {
 	if len(hash) < 8 {
 		return ""
@@ -48,7 +44,7 @@ func (c *attestationIdentityCache) remember(data []byte) []byte {
 		c.hashToData = make(map[string][]byte)
 	}
 	hash := hashAttestationData(data)
-	key := attestationHashKey(hash)
+	key := string(hash)
 	if _, ok := c.hashToData[key]; !ok {
 		c.hashToData[key] = slices.Clone(data)
 	}
@@ -61,12 +57,12 @@ func (c *attestationIdentityCache) resolve(data, hash []byte, requireData bool) 
 		if len(hash) > 0 && !bytes.Equal(hash, computed) {
 			return nil, nil, fmt.Errorf("attestation_data_hash mismatch")
 		}
-		return c.hashToData[attestationHashKey(computed)], computed, nil
+		return c.hashToData[string(computed)], computed, nil
 	}
 	if len(hash) != sha256.Size {
 		return nil, nil, fmt.Errorf("missing attestation_data identity")
 	}
-	data, ok := c.hashToData[attestationHashKey(hash)]
+	data, ok := c.hashToData[string(hash)]
 	if requireData && !ok {
 		return nil, nil, fmt.Errorf("unknown attestation_data_hash")
 	}
@@ -74,7 +70,7 @@ func (c *attestationIdentityCache) resolve(data, hash []byte, requireData bool) 
 }
 
 func peerSentFull(sent map[peer.ID]map[string]struct{}, p peer.ID, hash []byte) bool {
-	_, ok := sent[p][attestationHashKey(hash)]
+	_, ok := sent[p][string(hash)]
 	return ok
 }
 
@@ -84,7 +80,7 @@ func markPeerSentFull(sent map[peer.ID]map[string]struct{}, p peer.ID, hash []by
 		perPeer = make(map[string]struct{})
 		sent[p] = perPeer
 	}
-	perPeer[attestationHashKey(hash)] = struct{}{}
+	perPeer[string(hash)] = struct{}{}
 }
 
 func setBatchIdentity(batch *pb.BatchedAttestation, b *AttestationState, includeFullData bool) {
