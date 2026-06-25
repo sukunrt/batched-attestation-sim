@@ -57,6 +57,30 @@ func TestBitmapWriterClonesQueuedMetadata(t *testing.T) {
 	require.Equal(t, []byte{0x01}, env.Metadatas[0].Available)
 }
 
+func TestBitmapWriterKeepsFirstFullDataThroughCoalescing(t *testing.T) {
+	w := testBitmapWriter()
+	full := testBitmapMetadata(1, "data", []byte{0x01})
+	hashOnly := testBitmapMetadata(1, "data", []byte{0x03})
+	hashOnly.AttestationData = nil
+	hashOnly.AttestationDataHash = hashAttestationData([]byte("data"))
+
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{full})
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{hashOnly})
+
+	<-w.work
+	first := w.getNextBitmap()
+	require.Len(t, first.Metadatas, 1)
+	require.Equal(t, []byte("data"), first.Metadatas[0].AttestationData)
+	require.Equal(t, []byte{0x03}, first.Metadatas[0].Available)
+
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{full})
+	<-w.work
+	second := w.getNextBitmap()
+	require.Len(t, second.Metadatas, 1)
+	require.Empty(t, second.Metadatas[0].AttestationData)
+	require.Equal(t, hashAttestationData([]byte("data")), second.Metadatas[0].AttestationDataHash)
+}
+
 func testBitmapWriter() *bitmapWriter {
 	return &bitmapWriter{
 		work:    make(chan struct{}, 1),

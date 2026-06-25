@@ -88,6 +88,7 @@ func (l *countLevel) remove(bucketKey string, pos int) bool {
 // metric, §E1); peerAvail is each peer's advertised/inferred available bitmap.
 type bucket struct {
 	data       []byte
+	dataHash   []byte
 	atts       map[int]*attEntry
 	validating map[int]struct{}
 	validated  map[int]struct{}
@@ -116,11 +117,16 @@ type slotState struct {
 	validatedSinceEmit int
 }
 
-// newBucket initialises empty per-(topic, slot, attestation_data) state. data is
-// cloned so the caller's frame buffer can be reused.
-func newBucket(data []byte) *bucket {
+// newBucket initialises empty per-(topic, slot, hash(attestation_data)) state.
+// data is cloned so the caller's frame buffer can be reused.
+func newBucket(data []byte, hashes ...[]byte) *bucket {
+	hash := hashAttestationData(data)
+	if len(hashes) > 0 {
+		hash = slices.Clone(hashes[0])
+	}
 	return &bucket{
 		data:        slices.Clone(data),
+		dataHash:    slices.Clone(hash),
 		atts:        make(map[int]*attEntry),
 		validating:  make(map[int]struct{}),
 		validated:   make(map[int]struct{}),
@@ -148,13 +154,19 @@ func (ss *slotState) ensureLevel(k int) {
 }
 
 // getOrCreateBucket returns (creating as needed) the bucket for attestation_data
-// within this slot.
-func (ss *slotState) getOrCreateBucket(data []byte) *bucket {
-	key := string(data)
+// hash within this slot.
+func (ss *slotState) getOrCreateBucket(data []byte, hashes ...[]byte) *bucket {
+	hash := hashAttestationData(data)
+	if len(hashes) > 0 {
+		hash = slices.Clone(hashes[0])
+	}
+	key := attestationHashKey(hash)
 	b, ok := ss.buckets[key]
 	if !ok {
-		b = newBucket(data)
+		b = newBucket(data, hash)
 		ss.buckets[key] = b
+	} else if len(b.data) == 0 && len(data) > 0 {
+		b.data = slices.Clone(data)
 	}
 	return b
 }
@@ -209,7 +221,7 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 	hc := b.holderCount[pos]
 	b.holderCount[pos] = hc + 1
 	// Only validated positions live in the index; bump is a no-op otherwise.
-	bk := string(b.data)
+	bk := attestationHashKey(b.dataHash)
 
 	if hc >= len(ss.levels) || !ss.levels[hc].remove(bk, pos) {
 		return true
@@ -280,16 +292,21 @@ OUTER:
 // encodeBatch builds a BatchedAttestation for the given positions, emitting
 // AttestorIndices and Signatures in the same order as positions. Caller must
 // ensure every position exists in b.atts.
-func encodeBatch(b *bucket, positions []int) *pb.BatchedAttestation {
+func encodeBatch(b *bucket, positions []int, full bool) *pb.BatchedAttestation {
 	idxs := make([]uint32, 0, len(positions))
 	sigs := make([][]byte, 0, len(positions))
 	for _, pos := range positions {
 		idxs = append(idxs, uint32(pos))
 		sigs = append(sigs, b.atts[pos].Signature)
 	}
-	return &pb.BatchedAttestation{
-		AttestationData: b.data,
+	batch := &pb.BatchedAttestation{
 		AttestorIndices: idxs,
 		Signatures:      sigs,
 	}
+	if full && len(b.data) > 0 {
+		batch.AttestationData = b.data
+	} else {
+		batch.AttestationDataHash = b.dataHash
+	}
+	return batch
 }

@@ -141,7 +141,7 @@ func TestPublishLocalCreatesBucketAndMarksValidated(t *testing.T) {
 	ss := m.getSlotState("topic0", 5)
 	require.NotNil(t, ss)
 	require.Len(t, ss.attestationsMap, 1)
-	b := ss.attestationsMap["dataA"]
+	b := ss.attestationsMap[testAttKey("dataA")]
 	require.NotNil(t, b)
 	assert.Contains(t, b.validated, 3)
 	assert.NotContains(t, b.validating, 3)
@@ -154,8 +154,8 @@ func TestPublishLocalSeparatesBucketsByAttestationData(t *testing.T) {
 	ss := m.getSlotState("topic0", 5)
 	require.NotNil(t, ss)
 	require.Len(t, ss.attestationsMap, 2, "different attestation_data must produce separate buckets at the same slot")
-	assert.Contains(t, ss.attestationsMap["dataA"].validated, 3)
-	assert.Contains(t, ss.attestationsMap["dataB"].validated, 3)
+	assert.Contains(t, ss.attestationsMap[testAttKey("dataA")].validated, 3)
+	assert.Contains(t, ss.attestationsMap[testAttKey("dataB")].validated, 3)
 }
 
 func TestPublishLocalDuplicateNoop(t *testing.T) {
@@ -163,7 +163,7 @@ func TestPublishLocalDuplicateNoop(t *testing.T) {
 	m.publishLocal("topic0", 1, 3, []byte("sig"), []byte("d"))
 	m.publishLocal("topic0", 1, 3, []byte("sig-dup"), []byte("d"))
 	ss := m.getSlotState("topic0", 1)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	assert.Equal(t, "sig", string(b.attestations[3].Signature), "duplicate add must not overwrite")
 }
 
@@ -186,7 +186,7 @@ func TestMarkValidatedPromotes(t *testing.T) {
 	m := newPartialUnitManager(t)
 	m.publishLocal("topic0", 1, 0, []byte("s"), []byte("d"))
 	ss := m.getSlotState("topic0", 1)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	entries := b.addReceived([]int{4}, [][]byte{[]byte("s4")})
 	assert.NotContains(t, b.validated, 4)
 
@@ -296,6 +296,24 @@ func TestEncodeBatchEmitsIndicesAndOrdersSignatures(t *testing.T) {
 	require.Len(t, batch.Signatures, 2)
 	assert.Equal(t, []byte("sig0"), batch.Signatures[0])
 	assert.Equal(t, []byte("sig5"), batch.Signatures[1])
+}
+
+func TestEncodeBatchSendsFullDataOncePerPeer(t *testing.T) {
+	m := newPartialUnitManager(t)
+	b := newAttestationState([]byte("d"))
+	b.attestations[0] = &PartialAttestationEntry{Position: 0, Signature: []byte("sig0"), Data: b.data}
+	p := peer.ID("p0")
+
+	first := m.encodeBatchForPeer(p, b, []int{0})
+	require.Equal(t, []byte("d"), first.AttestationData)
+	require.Empty(t, first.AttestationDataHash)
+
+	second := m.encodeBatchForPeer(p, b, []int{0})
+	require.Empty(t, second.AttestationData)
+	require.Equal(t, b.dataHash, second.AttestationDataHash)
+
+	otherPeer := m.encodeBatchForPeer(peer.ID("p1"), b, []int{0})
+	require.Equal(t, []byte("d"), otherPeer.AttestationData)
 }
 
 // -----------------------------------------------------------------------------
@@ -481,7 +499,7 @@ func TestPublishActionsGossipPeerWithPendingWantGetsData(t *testing.T) {
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 	// Seed pendingWant for the peer in this bucket.
 	ss := m.getSlotState("t0", 1)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	bps := newPeerAttestationState(testCommitteeSize)
 	bps.pendingWant.Set(0)
 	b.peers[peer.ID("p0")] = bps
@@ -578,7 +596,7 @@ func TestPublishActionsPendingWantClearedAfterTick(t *testing.T) {
 	m := newPartialUnitManager(t)
 	m.publishLocal("t0", 1, 0, []byte("s"), []byte("d"))
 	ss := m.getSlotState("t0", 1)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	bps := newPeerAttestationState(testCommitteeSize)
 	bps.pendingWant.Set(99) // unsatisfiable
 	b.peers[peer.ID("p0")] = bps
@@ -648,7 +666,7 @@ func TestOnIncomingRPCAvailableMarksPeerGossipAndUpdatesAvailable(t *testing.T) 
 	assert.True(t, peers[pid].gossipPeer)
 	ss := m.getSlotState(topic, 1)
 	require.NotNil(t, ss)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	require.NotNil(t, b)
 	bps := b.peers[pid]
 	require.NotNil(t, bps)
@@ -676,7 +694,7 @@ func TestOnIncomingRPCRequestsUpdatesPendingWant(t *testing.T) {
 
 	assert.True(t, peers[pid].gossipPeer)
 	ss := m.getSlotState(topic, 1)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	bps := b.peers[pid]
 	assert.True(t, bps.pendingWant.Get(3))
 }
@@ -701,7 +719,7 @@ func TestOnIncomingRPCPartialMessageInfersAvailable(t *testing.T) {
 
 	ss := m.getSlotState(topic, 1)
 	require.NotNil(t, ss)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	require.NotNil(t, b)
 	m.mu.Lock()
 	_, has4 := b.attestations[4]
@@ -737,7 +755,7 @@ func TestOnIncomingRPCSubmitsToVerifier(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		ss := m.getSlotState(topic, 1)
-		b := ss.attestationsMap["d"]
+		b := ss.attestationsMap[testAttKey("d")]
 		m.mu.Lock()
 		_, validated := b.validated[9]
 		_, validating := b.validating[9]
@@ -767,8 +785,8 @@ func TestOnIncomingRPCSeparatesBucketsAcrossForks(t *testing.T) {
 
 	ss := m.getSlotState(topic, 1)
 	require.Len(t, ss.attestationsMap, 2, "forks must produce independent buckets")
-	bA := ss.attestationsMap["forkA"]
-	bB := ss.attestationsMap["forkB"]
+	bA := ss.attestationsMap[testAttKey("forkA")]
+	bB := ss.attestationsMap[testAttKey("forkB")]
 	assert.Equal(t, "sA", string(bA.attestations[5].Signature))
 	assert.Equal(t, "sB", string(bB.attestations[5].Signature))
 }

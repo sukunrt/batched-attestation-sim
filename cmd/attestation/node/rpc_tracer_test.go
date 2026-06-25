@@ -340,13 +340,13 @@ func TestAttStatsHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if b, c, dB, sB := partialDataStats(encData); b != 2 || c != 4 || dB != 256 || sB != 384 {
-		t.Errorf("partialDataStats = (%d, %d, %d, %d), want (2, 4, 256, 384)", b, c, dB, sB)
+	if b, c, dB, hB, sB := partialDataStats(encData); b != 2 || c != 4 || dB != 256 || hB != 0 || sB != 384 {
+		t.Errorf("partialDataStats = (%d, %d, %d, %d, %d), want (2, 4, 256, 0, 384)", b, c, dB, hB, sB)
 	}
-	if b, c, dB, sB := partialDataStats([]byte{0xFF}); b != 0 || c != 0 || dB != 0 || sB != 0 {
-		t.Errorf("partialDataStats(bad) = (%d, %d, %d, %d), want zeros", b, c, dB, sB)
+	if b, c, dB, hB, sB := partialDataStats([]byte{0xFF}); b != 0 || c != 0 || dB != 0 || hB != 0 || sB != 0 {
+		t.Errorf("partialDataStats(bad) = (%d, %d, %d, %d, %d), want zeros", b, c, dB, hB, sB)
 	}
-	if b, _, _, _ := partialDataStats(nil); b != 0 {
+	if b, _, _, _, _ := partialDataStats(nil); b != 0 {
 		t.Errorf("partialDataStats(nil) batches = %d, want 0", b)
 	}
 
@@ -368,10 +368,10 @@ func TestAttStatsHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if m, av, rq := partialMetaStats(encMeta); m != 2 || av != 3 || rq != 1 {
-		t.Errorf("partialMetaStats = (%d, %d, %d), want (2, 3, 1)", m, av, rq)
+	if m, av, rq, hB := partialMetaStats(encMeta); m != 2 || av != 3 || rq != 1 || hB != 0 {
+		t.Errorf("partialMetaStats = (%d, %d, %d, %d), want (2, 3, 1, 0)", m, av, rq, hB)
 	}
-	if m, av, rq := partialMetaStats([]byte{0xFF}); m != 0 || av != 0 || rq != 0 {
-		t.Errorf("partialMetaStats(bad) = (%d, %d, %d), want zeros", m, av, rq)
+	if m, av, rq, hB := partialMetaStats([]byte{0xFF}); m != 0 || av != 0 || rq != 0 || hB != 0 {
+		t.Errorf("partialMetaStats(bad) = (%d, %d, %d, %d), want zeros", m, av, rq, hB)
 	}
 }

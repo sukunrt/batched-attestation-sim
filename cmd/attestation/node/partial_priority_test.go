@@ -101,7 +101,7 @@ func seedValidated(m *priorityAttestationManager, topic string, slot int, data [
 		}
 		b.validated[pos] = struct{}{}
 		b.sendCount[pos] = sc
-		ss.indexAddValidated(string(b.data), pos, sc)
+		ss.indexAddValidated(attestationHashKey(b.dataHash), pos, sc)
 	}
 }
 
@@ -149,6 +149,24 @@ func intRange(start, n int) []int {
 	return out
 }
 
+func testAttKey(data string) string {
+	return attestationHashKey(hashAttestationData([]byte(data)))
+}
+
+func testBatchLabel(batch *pb.BatchedAttestation) string {
+	if len(batch.AttestationData) > 0 {
+		return string(batch.AttestationData)
+	}
+	switch attestationHashKey(batch.AttestationDataHash) {
+	case testAttKey("A"):
+		return "A"
+	case testAttKey("B"):
+		return "B"
+	default:
+		return ""
+	}
+}
+
 // -----------------------------------------------------------------------------
 // (1) Priority order — least-forwarded positions go out first, chunked at N.
 // -----------------------------------------------------------------------------
@@ -170,7 +188,7 @@ func TestPriorityOrdersByForwardCount(t *testing.T) {
 	assert.Nil(t, actions[0].ctrl, "mesh peer gets no metadata")
 
 	m.mu.Lock()
-	b := m.getSlotState("t0", 1).attestationsMap["d"]
+	b := m.getSlotState("t0", 1).attestationsMap[testAttKey("d")]
 	for pos := range 50 {
 		assert.Equal(t, pos+1, b.sendCount[pos], "sendCount bumped for pos %d", pos)
 	}
@@ -193,7 +211,7 @@ func TestPrioritySkipsAlreadyAvailableAndContinues(t *testing.T) {
 
 	// Mesh peer already has the lowest-order positions {0..4}.
 	m.mu.Lock()
-	b := m.getSlotState("t0", 1).attestationsMap["d"]
+	b := m.getSlotState("t0", 1).attestationsMap[testAttKey("d")]
 	bps := initAndGetPeerAttestationState(b, peer.ID("p0"), testCommitteeSize)
 	for _, pos := range []int{0, 1, 2, 3, 4} {
 		bps.available.Set(pos)
@@ -237,7 +255,8 @@ func TestPriorityCrossBucketChunk(t *testing.T) {
 	byData := map[string][]int{}
 	for _, batch := range first.payload.Batches {
 		for _, idx := range batch.AttestorIndices {
-			byData[string(batch.AttestationData)] = append(byData[string(batch.AttestationData)], int(idx))
+			label := testBatchLabel(batch)
+			byData[label] = append(byData[label], int(idx))
 		}
 	}
 	assert.Equal(t, intRange(0, 15), byData["A"], "A contributes its 15 lowest-forwarded positions, in order")
@@ -251,7 +270,8 @@ func TestPriorityCrossBucketChunk(t *testing.T) {
 	for _, a := range actions {
 		for _, batch := range a.payload.Batches {
 			for _, idx := range batch.AttestorIndices {
-				all[string(batch.AttestationData)] = append(all[string(batch.AttestationData)], int(idx))
+				label := testBatchLabel(batch)
+				all[label] = append(all[label], int(idx))
 			}
 		}
 	}
@@ -275,7 +295,7 @@ func TestPriorityGossipWantChunked(t *testing.T) {
 	// Gossip peer requests positions 0..39 (no Available advertised).
 	wanted := intRange(0, 40)
 	m.mu.Lock()
-	b := m.getSlotState("t0", 1).attestationsMap["d"]
+	b := m.getSlotState("t0", 1).attestationsMap[testAttKey("d")]
 	bps := initAndGetPeerAttestationState(b, peer.ID("p0"), testCommitteeSize)
 	for _, pos := range wanted {
 		bps.pendingWant.Set(pos)
@@ -339,7 +359,7 @@ func TestPriorityLifetimeCeilingExcluded(t *testing.T) {
 
 	m.mu.Lock()
 	ss := m.getSlotState("t0", 1)
-	b := ss.attestationsMap["d"]
+	b := ss.attestationsMap[testAttKey("d")]
 	assert.Equal(t, 1, b.sendCount[0])
 	assert.Equal(t, 1, b.sendCount[2])
 	assert.Equal(t, 2, b.sendCount[1])
@@ -482,7 +502,7 @@ func TestPriorityNoMetadataOnlySendToMeshPeer(t *testing.T) {
 
 	// Mesh peer already has all 10 positions, so there is no data to send it.
 	m.mu.Lock()
-	b := m.getSlotState("t0", 1).attestationsMap["d"]
+	b := m.getSlotState("t0", 1).attestationsMap[testAttKey("d")]
 	bps := initAndGetPeerAttestationState(b, peer.ID("p0"), testCommitteeSize)
 	for pos := range 10 {
 		bps.available.Set(pos)
@@ -507,7 +527,7 @@ func TestPriorityNoPiggybackForGossipPeer(t *testing.T) {
 	// Gossip peer requests positions 0..39 (advertises no Available), so it
 	// receives data but no metadata of its own.
 	m.mu.Lock()
-	b := m.getSlotState("t0", 1).attestationsMap["d"]
+	b := m.getSlotState("t0", 1).attestationsMap[testAttKey("d")]
 	bps := initAndGetPeerAttestationState(b, peer.ID("p0"), testCommitteeSize)
 	for _, pos := range intRange(0, 40) {
 		bps.pendingWant.Set(pos)
@@ -552,7 +572,7 @@ func TestPriorityDataWithAvailableDoesNotReclassifyAsGossip(t *testing.T) {
 	assert.False(t, peers[pid].gossipPeer, "data+available RPC must not reclassify a mesh peer as gossip")
 
 	m.mu.Lock()
-	bps := m.getSlotState(topic, 1).attestationsMap["d"].peers[pid]
+	bps := m.getSlotState(topic, 1).attestationsMap[testAttKey("d")].peers[pid]
 	require.NotNil(t, bps)
 	assert.True(t, bps.available.Get(1), "available from metadata recorded")
 	assert.True(t, bps.available.Get(2), "available from metadata recorded")

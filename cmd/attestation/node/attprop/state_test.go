@@ -61,6 +61,10 @@ func levelLen(l countLevel) int {
 	return n
 }
 
+func bucketKey(b *bucket) string {
+	return attestationHashKey(b.dataHash)
+}
+
 const testCommittee = 64
 
 // newTestSlot builds a slotState with one bucket and the given validated
@@ -72,7 +76,7 @@ func newTestSlot(maxPeers int, validated ...int) (*slotState, *bucket) {
 	for _, pos := range validated {
 		b.atts[pos] = &attEntry{Position: pos, Signature: []byte{1}, Data: b.data}
 		b.validated[pos] = struct{}{}
-		ss.indexAddValidated(string(b.data), pos, 0)
+		ss.indexAddValidated(bucketKey(b), pos, 0)
 	}
 	return ss, b
 }
@@ -84,20 +88,20 @@ func TestIndexAddValidatedInvariant(t *testing.T) {
 	b := ss.getOrCreateBucket([]byte("d"))
 	for _, pos := range []int{5, 9, 1} {
 		b.validated[pos] = struct{}{}
-		ss.indexAddValidated(string(b.data), pos, 0)
+		ss.indexAddValidated(bucketKey(b), pos, 0)
 	}
 	// One at hc 2, one beyond the initial index size.
 	b.validated[20] = struct{}{}
 	b.holderCount[20] = 2
-	ss.indexAddValidated(string(b.data), 20, 2)
+	ss.indexAddValidated(bucketKey(b), 20, 2)
 	b.validated[21] = struct{}{}
 	b.holderCount[21] = 3
-	ss.indexAddValidated(string(b.data), 21, 3)
+	ss.indexAddValidated(bucketKey(b), 21, 3)
 
 	require.Equal(t, 3, levelLen(ss.levels[0]))
 	require.Equal(t, 1, levelLen(ss.levels[2]))
 	require.GreaterOrEqual(t, len(ss.levels), 4)
-	require.True(t, levelContains(ss.levels[3], string(b.data), 21),
+	require.True(t, levelContains(ss.levels[3], bucketKey(b), 21),
 		"index must grow for higher holder-count positions")
 	checkIndexInvariant(t, ss)
 }
@@ -114,14 +118,14 @@ func TestScarcityAscendingOrder(t *testing.T) {
 		b.atts[x.pos] = &attEntry{Position: x.pos, Data: b.data}
 		b.validated[x.pos] = struct{}{}
 		b.holderCount[x.pos] = x.hc
-		ss.indexAddValidated(string(b.data), x.pos, x.hc)
+		ss.indexAddValidated(bucketKey(b), x.pos, x.hc)
 	}
 	checkIndexInvariant(t, ss)
 
 	// Cap large enough to take all three: all levels are visited scarcest-first.
 	chunk, held := ss.selectOneChunkForPeer(pid(1), 10, true, noHolderCountLimit)
 	require.False(t, held)
-	require.ElementsMatch(t, []int{30, 20, 10}, chunk[string(b.data)])
+	require.ElementsMatch(t, []int{30, 20, 10}, chunk[bucketKey(b)])
 }
 
 // TestScarcityChunkCap: with more validated positions than the cap, the chunk
@@ -133,7 +137,7 @@ func TestScarcityChunkCap(t *testing.T) {
 	chunk, held := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
 	require.False(t, held)
 	require.Equal(t, 3, chunkLen(chunk))
-	require.Subset(t, []int{1, 2, 3, 4, 5}, chunk[string(b.data)])
+	require.Subset(t, []int{1, 2, 3, 4, 5}, chunk[bucketKey(b)])
 }
 
 func TestSelectionHolderCountLimit(t *testing.T) {
@@ -143,18 +147,18 @@ func TestSelectionHolderCountLimit(t *testing.T) {
 		b.atts[x.pos] = &attEntry{Position: x.pos, Data: b.data}
 		b.validated[x.pos] = struct{}{}
 		b.holderCount[x.pos] = x.hc
-		ss.indexAddValidated(string(b.data), x.pos, x.hc)
+		ss.indexAddValidated(bucketKey(b), x.pos, x.hc)
 	}
 	checkIndexInvariant(t, ss)
 
 	chunk, held := ss.selectOneChunkForPeer(pid(1), 10, true, 2)
 	require.False(t, held)
-	require.ElementsMatch(t, []int{10, 20}, chunk[string(b.data)])
+	require.ElementsMatch(t, []int{10, 20}, chunk[bucketKey(b)])
 	require.False(t, b.peerAvail[pid(1)].Get(30), "level 2 is outside limit < 2")
 
 	chunk, held = ss.selectOneChunkForPeer(pid(2), 10, true, noHolderCountLimit)
 	require.False(t, held)
-	require.ElementsMatch(t, []int{10, 20, 30}, chunk[string(b.data)])
+	require.ElementsMatch(t, []int{10, 20, 30}, chunk[bucketKey(b)])
 	checkIndexInvariant(t, ss)
 }
 
@@ -175,7 +179,7 @@ func TestSelectCanHoldPartialWithoutCommit(t *testing.T) {
 
 	chunk, held = ss.selectOneChunkForPeer(pid(1), 2, false, noHolderCountLimit)
 	require.False(t, held)
-	require.ElementsMatch(t, []int{1, 2}, chunk[string(b.data)])
+	require.ElementsMatch(t, []int{1, 2}, chunk[bucketKey(b)])
 }
 
 // TestCommitAsDrawnReordersLevels: a draw commits holder-count++ per position,
@@ -184,7 +188,7 @@ func TestSelectCanHoldPartialWithoutCommit(t *testing.T) {
 func TestCommitAsDrawnReordersLevels(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3)
 	chunk, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
-	require.ElementsMatch(t, []int{1, 2, 3}, chunk[string(b.data)])
+	require.ElementsMatch(t, []int{1, 2, 3}, chunk[bucketKey(b)])
 
 	// After the draw: holderCount 1 for each, entries now in level 1, peer holds.
 	for _, pos := range []int{1, 2, 3} {
@@ -208,7 +212,7 @@ func TestCommitAsDrawnSpreadsAcrossPeers(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3)
 
 	cA, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
-	require.ElementsMatch(t, []int{1, 2, 3}, cA[string(b.data)])
+	require.ElementsMatch(t, []int{1, 2, 3}, cA[bucketKey(b)])
 	for _, pos := range []int{1, 2, 3} {
 		require.Equal(t, 1, b.holderCount[pos], "after A: hc 1")
 	}
@@ -216,7 +220,7 @@ func TestCommitAsDrawnSpreadsAcrossPeers(t *testing.T) {
 	// B lacks 1,2,3 (A's draw only set A's available), so B draws them too; each
 	// goes from hc 1 → 2.
 	cB, _ := ss.selectOneChunkForPeer(pid(2), 3, true, noHolderCountLimit)
-	require.ElementsMatch(t, []int{1, 2, 3}, cB[string(b.data)])
+	require.ElementsMatch(t, []int{1, 2, 3}, cB[bucketKey(b)])
 	for _, pos := range []int{1, 2, 3} {
 		require.Equal(t, 2, b.holderCount[pos], "after B: hc 2")
 	}

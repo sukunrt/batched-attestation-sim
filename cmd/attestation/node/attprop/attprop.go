@@ -139,7 +139,9 @@ type Manager struct {
 	mesh *meshState
 
 	// slots holds per-slot state with the holder-count scarcity index (§E).
-	slots map[int]*slotState
+	slots      map[int]*slotState
+	identities attestationIdentityCache
+	sentFull   map[peer.ID]map[string]struct{}
 
 	// activeData counts in-flight data sends gated by the budget B. Push sends
 	// are exempt (§F1) but still tracked here for observability.
@@ -180,6 +182,8 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 		controlWriters: make(map[peer.ID]*peerSender),
 		mesh:           newMeshState(cfg),
 		slots:          make(map[int]*slotState),
+		identities:     newAttestationIdentityCache(),
+		sentFull:       make(map[peer.ID]map[string]struct{}),
 		opening:        make(map[peer.ID]struct{}),
 		pending:        make(map[peer.ID]*peerStreams),
 	}

@@ -154,6 +154,9 @@ type priorityAttestationManager struct {
 	maxPerMessage int // N: per-data-message attestation cap
 
 	topicIndexMap map[string]int // topic name -> stable index, used for log tagging
+	identities    attestationIdentityCache
+	sentDataFull  map[peer.ID]map[string]struct{}
+	sentMetaFull  map[peer.ID]map[string]struct{}
 
 	mu    sync.Mutex
 	slots map[string]map[int]*prioritySlotState
@@ -181,6 +184,9 @@ func newPriorityAttestationManager(
 		committeeSize: n.CommitteeSize,
 		maxPerMessage: maxPerMessage,
 		topicIndexMap: topicIndexMap,
+		identities:    newAttestationIdentityCache(),
+		sentDataFull:  make(map[peer.ID]map[string]struct{}),
+		sentMetaFull:  make(map[peer.ID]map[string]struct{}),
 		slots:         make(map[string]map[int]*prioritySlotState),
 	}
 }
@@ -213,20 +219,36 @@ func (m *priorityAttestationManager) getSlotState(topic string, slot int) *prior
 
 // getOrCreateBucket returns (creating as needed) the bucket for attestation_data
 // within a slot state, registering its stable bucket-order seq. Caller holds m.mu.
-func getOrCreateBucket(ss *prioritySlotState, data []byte) *AttestationState {
-	key := string(data)
+func getOrCreateBucket(ss *prioritySlotState, data []byte, hashes ...[]byte) *AttestationState {
+	hash := hashAttestationData(data)
+	if len(hashes) > 0 {
+		hash = slices.Clone(hashes[0])
+	}
+	key := attestationHashKey(hash)
 	b, ok := ss.attestationsMap[key]
 	if !ok {
-		b = newAttestationState(data)
+		b = newAttestationState(data, hash)
 		ss.attestationsMap[key] = b
 		ss.ensureBucketSeq(key)
+	} else if len(b.data) == 0 && len(data) > 0 {
+		b.data = slices.Clone(data)
 	}
 	return b
 }
 
 func (m *priorityAttestationManager) getOrCreateAttestationState(topic string, slot int, data []byte) *AttestationState {
+	hash := m.identities.remember(data)
+	return m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
+}
+
+func (m *priorityAttestationManager) getOrCreateAttestationStateByHash(
+	topic string,
+	slot int,
+	data []byte,
+	hash []byte,
+) *AttestationState {
 	ss := m.getOrCreateSlotState(topic, slot)
-	return getOrCreateBucket(ss, data)
+	return getOrCreateBucket(ss, data, hash)
 }
 
 // publishLocal stores a self-produced attestation in the right bucket, marks it
@@ -235,7 +257,8 @@ func (m *priorityAttestationManager) publishLocal(topic string, slot, position i
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ss := m.getOrCreateSlotState(topic, slot)
-	b := getOrCreateBucket(ss, data)
+	hash := m.identities.remember(data)
+	b := getOrCreateBucket(ss, data, hash)
 	if _, ok := b.attestations[position]; ok {
 		return
 	}
@@ -246,7 +269,7 @@ func (m *priorityAttestationManager) publishLocal(topic string, slot, position i
 	}
 	b.validated[position] = struct{}{}
 	b.newSinceLastTick = true
-	ss.indexAddValidated(string(b.data), position, b.sendCount[position])
+	ss.indexAddValidated(attestationHashKey(b.dataHash), position, b.sendCount[position])
 }
 
 // markValidated promotes positions from validating to validated after the batch
@@ -259,7 +282,8 @@ func (m *priorityAttestationManager) markValidated(topic string, slot int, data 
 	if ss == nil {
 		return
 	}
-	b, ok := ss.attestationsMap[string(data)]
+	hash := m.identities.remember(data)
+	b, ok := ss.attestationsMap[attestationHashKey(hash)]
 	if !ok {
 		return
 	}
@@ -273,7 +297,7 @@ func (m *priorityAttestationManager) markValidated(topic string, slot int, data 
 		delete(b.validating, pe.Position)
 		b.validated[pe.Position] = struct{}{}
 		b.newSinceLastTick = true
-		ss.indexAddValidated(string(b.data), pe.Position, b.sendCount[pe.Position])
+		ss.indexAddValidated(attestationHashKey(b.dataHash), pe.Position, b.sendCount[pe.Position])
 		latencyMs := now.Sub(slotStart).Milliseconds()
 		m.logger.Info("attestation_validated",
 			"slot", slot,
@@ -332,14 +356,6 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 					requesters = append(requesters, p)
 				}
 			}
-			// availEnv advertises our validated bitmap across all buckets. It is
-			// constant for the tick (our validated set can't change while m.mu is
-			// held), so it is built once and piggybacked on the FIRST data message
-			// to each mesh peer (tracked by sentAvailableTo).
-			var availEnv []byte
-			if m.node.SendAvailableWithData {
-				availEnv = m.buildAvailableEnvelope(ss, slot)
-			}
 			sentAvailableTo := make(map[peer.ID]bool)
 			for {
 				progressed := false
@@ -357,7 +373,7 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 					})
 					for _, bk := range bks {
 						b := ss.attestationsMap[bk]
-						dataEnv.Batches = append(dataEnv.Batches, m.encodeBatch(b, chunk[bk]))
+						dataEnv.Batches = append(dataEnv.Batches, m.encodeBatchForPeer(p, b, chunk[bk]))
 						total += len(chunk[bk])
 					}
 					encodedData, err := proto.Marshal(dataEnv)
@@ -374,9 +390,11 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 					// gossip peers excluded (they get available via the metadata
 					// action below). Never sent without data, so the receiver won't
 					// reclassify us as a gossip peer.
-					if availEnv != nil && more && !peerStates[p].gossipPeer && !sentAvailableTo[p] {
-						action.EncodedPartsMetadata = availEnv
-						sentAvailableTo[p] = true
+					if m.node.SendAvailableWithData && more && !peerStates[p].gossipPeer && !sentAvailableTo[p] {
+						if availEnv := m.buildAvailableEnvelopeForPeer(p, ss, slot); availEnv != nil {
+							action.EncodedPartsMetadata = availEnv
+							sentAvailableTo[p] = true
+						}
 					}
 					m.logger.Info("partial_send_tick",
 						"peer", shortPeer(p),
@@ -415,6 +433,7 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 						wantList := wantPerPeerPerData[p][attDataStr]
 						md := getAttestationMetadata(b, m.committeeSize, slot, wantList, ps.sendAvailableList)
 						if md != nil {
+							m.setMetadataIdentityForPeer(p, b, md)
 							ctrl.Metadatas = append(ctrl.Metadatas, md)
 						}
 					}
@@ -453,17 +472,23 @@ func peerTypeLabel(ps peerState) string {
 	return "mesh"
 }
 
-// buildAvailableEnvelope marshals an available-only ControlEnvelope advertising
+// buildAvailableEnvelopeForPeer marshals an available-only ControlEnvelope advertising
 // our validated positions for every bucket at this (topic, slot), in bucketSeq
 // order. Returns nil when nothing is validated yet (or marshalling fails). Reuses
 // getAttestationMetadata so the bitmap encoding matches the gossip metadata path.
 // Caller holds m.mu.
-func (m *priorityAttestationManager) buildAvailableEnvelope(ss *prioritySlotState, slot int) []byte {
+func (m *priorityAttestationManager) buildAvailableEnvelopeForPeer(
+	p peer.ID,
+	ss *prioritySlotState,
+	slot int,
+) []byte {
 	bks := slices.Collect(maps.Keys(ss.attestationsMap))
 	slices.SortFunc(bks, func(a, b string) int { return ss.bucketSeq[a] - ss.bucketSeq[b] })
 	ctrl := &pb.ControlEnvelope{}
 	for _, bk := range bks {
-		if md := getAttestationMetadata(ss.attestationsMap[bk], m.committeeSize, slot, nil, true); md != nil {
+		b := ss.attestationsMap[bk]
+		if md := getAttestationMetadata(b, m.committeeSize, slot, nil, true); md != nil {
+			m.setMetadataIdentityForPeer(p, b, md)
 			ctrl.Metadatas = append(ctrl.Metadatas, md)
 		}
 	}
@@ -543,19 +568,40 @@ func (m *priorityAttestationManager) selectOneChunkForPeer(ss *prioritySlotState
 	return chunk, more
 }
 
-// encodeBatch builds a BatchedAttestation for the given positions, emitting
+// encodeBatchForPeer builds a BatchedAttestation for the given positions, emitting
 // AttestorIndices and Signatures in the same order as positions.
-func (m *priorityAttestationManager) encodeBatch(b *AttestationState, positions []int) *pb.BatchedAttestation {
+func (m *priorityAttestationManager) encodeBatchForPeer(
+	p peer.ID,
+	b *AttestationState,
+	positions []int,
+) *pb.BatchedAttestation {
 	idxs := make([]uint32, 0, len(positions))
 	sigs := make([][]byte, 0, len(positions))
 	for _, pos := range positions {
 		idxs = append(idxs, uint32(pos))
 		sigs = append(sigs, b.attestations[pos].Signature)
 	}
-	return &pb.BatchedAttestation{
-		AttestationData: b.data,
+	batch := &pb.BatchedAttestation{
 		AttestorIndices: idxs,
 		Signatures:      sigs,
+	}
+	full := !peerSentFull(m.sentDataFull, p, b.dataHash) && len(b.data) > 0
+	setBatchIdentity(batch, b, full)
+	if full {
+		markPeerSentFull(m.sentDataFull, p, b.dataHash)
+	}
+	return batch
+}
+
+func (m *priorityAttestationManager) setMetadataIdentityForPeer(
+	p peer.ID,
+	b *AttestationState,
+	md *pb.CommitteeAttestationPartsMetadata,
+) {
+	full := !peerSentFull(m.sentMetaFull, p, b.dataHash) && len(b.data) > 0
+	setMetadataIdentity(md, b, full)
+	if full {
+		markPeerSentFull(m.sentMetaFull, p, b.dataHash)
 	}
 }
 
@@ -664,7 +710,12 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 	hasData := len(dataEnv.Batches) > 0
 
 	for _, md := range ctrl.Metadatas {
-		b := m.getOrCreateAttestationState(topic, slot, md.AttestationData)
+		data, hash, err := m.identities.resolve(md.AttestationData, md.AttestationDataHash, false)
+		if err != nil {
+			m.logger.Error("drop partial metadata", "from", shortPeer(from), "err", err)
+			continue
+		}
+		b := m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
 		bps := initAndGetPeerAttestationState(b, from, m.committeeSize)
 
 		available := bitmap.Bitmap(md.Available)
@@ -683,14 +734,23 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 			"from", shortPeer(from),
 			"slot", slot,
 			"topic", topicIdx,
-			"att_digest", attDigestHex(md.AttestationData),
+			"att_digest", attDigestHexFor(data, hash),
 			"available_ones", available.OnesCount(),
 			"requests_ones", requests.OnesCount(),
 		)
 	}
 
 	for _, batch := range dataEnv.Batches {
-		b := m.getOrCreateAttestationState(topic, slot, batch.AttestationData)
+		data, hash, err := m.identities.resolve(
+			batch.AttestationData,
+			batch.AttestationDataHash,
+			true,
+		)
+		if err != nil {
+			m.logger.Error("drop partial batch", "from", shortPeer(from), "err", err)
+			continue
+		}
+		b := m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
 		bps := initAndGetPeerAttestationState(b, from, m.committeeSize)
 
 		if len(batch.AttestorIndices) != len(batch.Signatures) {
@@ -710,7 +770,7 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 			"from", shortPeer(from),
 			"slot", slot,
 			"topic", topicIdx,
-			"att_digest", attDigestHex(batch.AttestationData),
+			"att_digest", attDigestHexFor(data, hash),
 			"positions_count", len(positions),
 			"new_positions", len(newEntries),
 			"batch_bytes", proto.Size(batch),
@@ -721,7 +781,7 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 			latencyMs := time.Since(slotStart).Milliseconds()
 			for _, entry := range newEntries {
 				pe := entry.(*PartialAttestationEntry)
-				m.node.Tracer.OnPartialReceive(slot, topicIdx, pe.Position, batch.AttestationData, latencyMs)
+				m.node.Tracer.OnPartialReceive(slot, topicIdx, pe.Position, b.data, latencyMs)
 			}
 		}
 

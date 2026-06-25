@@ -113,8 +113,10 @@ use_partial_messages: true
 The partial-message path implements the spec at
 `../ethp2p/specs/draft-committee-attestation.md`. Wire shape:
 
-- `BatchedAttestation { attestation_data, attestor_indices (bitmap[num_attestors]), signatures[] }`.
-- `CommitteeAttestationPartsMetadata { slot, attestation_data, available (bitmap), requests (bitmap) }`.
+- `BatchedAttestation { attestation_data | attestation_data_hash, attestor_indices
+  (bitmap[num_attestors]), signatures[] }`.
+- `CommitteeAttestationPartsMetadata { slot, attestation_data | attestation_data_hash, available
+  (bitmap), requests (bitmap) }`.
 - `ControlEnvelope` wraps `repeated CommitteeAttestationPartsMetadata` per peer per tick.
 - `BatchedAttestationEnvelope` wraps `repeated BatchedAttestation` per peer per tick.
 
@@ -136,9 +138,11 @@ In partial-message mode:
 3. Mesh nodes run a periodic partial publish loop controlled by `publish_interval_ms` (default 20ms).
 4. Fanout nodes eagerly call `PublishPartial` for their single attestation because they do not
    rely on the mesh tick loop. Fanout sends one BatchedAttestation with one bit set.
-5. State is keyed per `(topic, slot, attestation_data)` bucket — forks at the same slot coexist
-   as independent buckets, satisfying the spec rule that nodes MUST NOT deduplicate by
-   `(slot, committee_position)`.
+5. State is keyed per `(topic, slot, sha256(attestation_data))` bucket — forks at the same slot
+   coexist as independent buckets, satisfying the spec rule that nodes MUST NOT deduplicate by
+   `(slot, committee_position)`. Each manager caches
+   `sha256(attestation_data) => attestation_data`; each peer receives full `attestation_data` once
+   per partial payload kind, then hash-only.
 6. Validation goes through the same node-owned batch verifier as classic mode, but is entered
    from the partial RPC handler: received attestations are enqueued with a per-submit callback
    that promotes them to validated state after the batch sleep. Normal topic validators are not
@@ -242,6 +246,9 @@ manager has its own eventloop, mesh, slot state, verifier, stream state, and sen
 is driven by **holder-count scarcity**: push peers receive missing attestations regardless of holder
 count, while bitmap peers receive only entries with holder count below
 `pushPeers + bitmapPeers/2`, throttled by the per-topic send budget `B`.
+Buckets are keyed by `sha256(attestation_data)`. Push and bitmap streams each send full
+`attestation_data` once per peer stream for a bucket, then send only `attestation_data_hash`; each
+manager caches `sha256(attestation_data) => attestation_data` for validation and tracing.
 
 Mode bool plumbing mirrors `partial_priority`: simctl writes the `att_propagation` key (plus the
 `attprop_*` tunables and `max_attestations_per_message`) into `config.yaml` from the Pydantic model,

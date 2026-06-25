@@ -134,6 +134,10 @@ spec. Each topic is a fixed committee of `num_attestors` members, chosen once wh
 is built: the topic's `fanout_nodes_per_topic` fanout nodes plus enough mesh nodes to reach
 `num_attestors`.
 
+Partial data and metadata identify each attestation-data bucket by `sha256(attestation_data)`.
+For each peer, the full `attestation_data` is sent once per partial payload kind; later messages
+for the same bucket carry only the hash.
+
 Classic GossipSub IHAVE/IWANT gossip remains enabled by default, including in partial-message
 mode:
 
@@ -183,6 +187,9 @@ data), bitmap (periodic have-set advertisement), and control (mesh graft/prune) 
 runs an independent manager/eventloop with its own mesh, state, verifier, and send budget. Push
 peers receive all missing attestations regardless of holder count; bitmap peers receive only scarce
 items with holder count below `pushPeers + bitmapPeers/2`.
+
+Push and bitmap streams send the full `attestation_data` once per peer stream for each bucket, then
+refer to it by `sha256(attestation_data)`.
 Enable it with:
 
 ```yaml

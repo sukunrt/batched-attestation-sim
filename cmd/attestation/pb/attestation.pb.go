@@ -198,12 +198,13 @@ func (x *Attestation) GetSignature() []byte {
 // Signatures are listed in the same order as `attestor_indices` (typically
 // ascending, but order is determined by the encoder).
 type BatchedAttestation struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	AttestationData []byte                 `protobuf:"bytes,1,opt,name=attestation_data,json=attestationData,proto3" json:"attestation_data,omitempty"`         // opaque AttestationData (sized to attestation_data_size)
-	AttestorIndices []uint32               `protobuf:"varint,2,rep,packed,name=attestor_indices,json=attestorIndices,proto3" json:"attestor_indices,omitempty"` // committee positions; values < committee_size
-	Signatures      [][]byte               `protobuf:"bytes,3,rep,name=signatures,proto3" json:"signatures,omitempty"`                                          // one per element of attestor_indices
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	AttestationData     []byte                 `protobuf:"bytes,1,opt,name=attestation_data,json=attestationData,proto3" json:"attestation_data,omitempty"`               // opaque AttestationData (sized to attestation_data_size)
+	AttestorIndices     []uint32               `protobuf:"varint,2,rep,packed,name=attestor_indices,json=attestorIndices,proto3" json:"attestor_indices,omitempty"`       // committee positions; values < committee_size
+	Signatures          [][]byte               `protobuf:"bytes,3,rep,name=signatures,proto3" json:"signatures,omitempty"`                                                // one per element of attestor_indices
+	AttestationDataHash []byte                 `protobuf:"bytes,4,opt,name=attestation_data_hash,json=attestationDataHash,proto3" json:"attestation_data_hash,omitempty"` // sha256(attestation_data), used after the first full-data send
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *BatchedAttestation) Reset() {
@@ -257,19 +258,27 @@ func (x *BatchedAttestation) GetSignatures() [][]byte {
 	return nil
 }
 
+func (x *BatchedAttestation) GetAttestationDataHash() []byte {
+	if x != nil {
+		return x.AttestationDataHash
+	}
+	return nil
+}
+
 // CommitteeAttestationPartsMetadata is the per-AttestationData gossip control
 // envelope. `available` advertises the positions the sender holds; `requests`
 // is a non-persistent IWANT — the receiver satisfies what it can on its next
 // publish tick and forgets the rest. Both fields are fixed-width bitmaps of
 // length `committee_size`.
 type CommitteeAttestationPartsMetadata struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Slot            int32                  `protobuf:"varint,1,opt,name=slot,proto3" json:"slot,omitempty"` // redundant with attestation_data per spec
-	AttestationData []byte                 `protobuf:"bytes,2,opt,name=attestation_data,json=attestationData,proto3" json:"attestation_data,omitempty"`
-	Available       []byte                 `protobuf:"bytes,3,opt,name=available,proto3" json:"available,omitempty"` // bitmap[committee_size]
-	Requests        []byte                 `protobuf:"bytes,4,opt,name=requests,proto3" json:"requests,omitempty"`   // bitmap[committee_size]
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Slot                int32                  `protobuf:"varint,1,opt,name=slot,proto3" json:"slot,omitempty"` // redundant with attestation_data per spec
+	AttestationData     []byte                 `protobuf:"bytes,2,opt,name=attestation_data,json=attestationData,proto3" json:"attestation_data,omitempty"`
+	Available           []byte                 `protobuf:"bytes,3,opt,name=available,proto3" json:"available,omitempty"`                                                  // bitmap[committee_size]
+	Requests            []byte                 `protobuf:"bytes,4,opt,name=requests,proto3" json:"requests,omitempty"`                                                    // bitmap[committee_size]
+	AttestationDataHash []byte                 `protobuf:"bytes,5,opt,name=attestation_data_hash,json=attestationDataHash,proto3" json:"attestation_data_hash,omitempty"` // sha256(attestation_data), used after the first full-data send
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CommitteeAttestationPartsMetadata) Reset() {
@@ -326,6 +335,13 @@ func (x *CommitteeAttestationPartsMetadata) GetAvailable() []byte {
 func (x *CommitteeAttestationPartsMetadata) GetRequests() []byte {
 	if x != nil {
 		return x.Requests
+	}
+	return nil
+}
+
+func (x *CommitteeAttestationPartsMetadata) GetAttestationDataHash() []byte {
+	if x != nil {
+		return x.AttestationDataHash
 	}
 	return nil
 }
@@ -532,18 +548,20 @@ const file_attestation_proto_rawDesc = "" +
 	"\bnode_num\x18\x01 \x01(\x05R\anodeNum\x12\x19\n" +
 	"\bslot_num\x18\x02 \x01(\x05R\aslotNum\x12\x12\n" +
 	"\x04data\x18\x04 \x01(\fR\x04data\x12\x1c\n" +
-	"\tsignature\x18\a \x01(\fR\tsignature\"\x8a\x01\n" +
+	"\tsignature\x18\a \x01(\fR\tsignature\"\xbe\x01\n" +
 	"\x12BatchedAttestation\x12)\n" +
 	"\x10attestation_data\x18\x01 \x01(\fR\x0fattestationData\x12)\n" +
 	"\x10attestor_indices\x18\x02 \x03(\rR\x0fattestorIndices\x12\x1e\n" +
 	"\n" +
 	"signatures\x18\x03 \x03(\fR\n" +
-	"signatures\"\x9c\x01\n" +
+	"signatures\x122\n" +
+	"\x15attestation_data_hash\x18\x04 \x01(\fR\x13attestationDataHash\"\xd0\x01\n" +
 	"!CommitteeAttestationPartsMetadata\x12\x12\n" +
 	"\x04slot\x18\x01 \x01(\x05R\x04slot\x12)\n" +
 	"\x10attestation_data\x18\x02 \x01(\fR\x0fattestationData\x12\x1c\n" +
 	"\tavailable\x18\x03 \x01(\fR\tavailable\x12\x1a\n" +
-	"\brequests\x18\x04 \x01(\fR\brequests\"_\n" +
+	"\brequests\x18\x04 \x01(\fR\brequests\x122\n" +
+	"\x15attestation_data_hash\x18\x05 \x01(\fR\x13attestationDataHash\"_\n" +
 	"\x0fControlEnvelope\x12L\n" +
 	"\tmetadatas\x18\x01 \x03(\v2..attestation.CommitteeAttestationPartsMetadataR\tmetadatas\"W\n" +
 	"\x1aBatchedAttestationEnvelope\x129\n" +

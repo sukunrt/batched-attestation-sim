@@ -24,6 +24,7 @@ message BatchedAttestation {
   bytes attestation_data       = 1; // opaque AttestationData (sized to attestation_data_size)
   repeated uint32 attestor_indices = 2; // committee positions; values < committee_size
   repeated bytes signatures    = 3; // one per element of attestor_indices
+  bytes attestation_data_hash  = 4; // sha256(attestation_data), used after the first full-data send
 }
 
 // CommitteeAttestationPartsMetadata is the per-AttestationData gossip control
@@ -36,6 +37,7 @@ message CommitteeAttestationPartsMetadata {
   bytes attestation_data  = 2;
   bytes available         = 3; // bitmap[committee_size]
   bytes requests          = 4; // bitmap[committee_size]
+  bytes attestation_data_hash = 5; // sha256(attestation_data), used after the first full-data send
 }
 
 // ControlEnvelope is the PartsMetadata blob: one envelope per (peer, tick)

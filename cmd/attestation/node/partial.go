@@ -73,7 +73,8 @@ type peerState struct {
 //
 // Forks at the same slot get independent state per `data`.
 type AttestationState struct {
-	data []byte
+	data     []byte
+	dataHash []byte
 
 	// attestations holds one entry per committee position we hold.
 	attestations map[int]*PartialAttestationEntry
@@ -99,10 +100,14 @@ type AttestationState struct {
 	newSinceLastTick bool
 }
 
-func newAttestationState(data []byte) *AttestationState {
-	dataCopy := slices.Clone(data)
+func newAttestationState(data []byte, hashes ...[]byte) *AttestationState {
+	hash := hashAttestationData(data)
+	if len(hashes) > 0 {
+		hash = slices.Clone(hashes[0])
+	}
 	return &AttestationState{
-		data:         dataCopy,
+		data:         slices.Clone(data),
+		dataHash:     slices.Clone(hash),
 		attestations: make(map[int]*PartialAttestationEntry),
 		validating:   make(map[int]struct{}),
 		validated:    make(map[int]struct{}),
@@ -116,7 +121,7 @@ func newAttestationState(data []byte) *AttestationState {
 // (topic, slot).
 type PartialAttestationSlotState struct {
 	slot            int
-	attestationsMap map[string]*AttestationState // string(attestation_data) => AttestationState
+	attestationsMap map[string]*AttestationState // string(sha256(attestation_data)) => AttestationState
 }
 
 func newSlotState(slot int) *PartialAttestationSlotState {
@@ -138,6 +143,9 @@ type partialAttestationManager struct {
 	committeeSize int
 
 	topicIndexMap map[string]int // topic name -> stable index, used for log tagging
+	identities    attestationIdentityCache
+	sentDataFull  map[peer.ID]map[string]struct{}
+	sentMetaFull  map[peer.ID]map[string]struct{}
 
 	mu    sync.Mutex
 	slots map[string]map[int]*PartialAttestationSlotState
@@ -160,6 +168,9 @@ func newPartialAttestationManager(
 		slotDuration:  slotDuration,
 		committeeSize: n.CommitteeSize,
 		topicIndexMap: topicIndexMap,
+		identities:    newAttestationIdentityCache(),
+		sentDataFull:  make(map[peer.ID]map[string]struct{}),
+		sentMetaFull:  make(map[peer.ID]map[string]struct{}),
 		slots:         make(map[string]map[int]*PartialAttestationSlotState),
 	}
 	return m
@@ -194,12 +205,24 @@ func (m *partialAttestationManager) getSlotState(topic string, slot int) *Partia
 }
 
 func (m *partialAttestationManager) getOrCreateAttestationState(topic string, slot int, data []byte) *AttestationState {
+	hash := m.identities.remember(data)
+	return m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
+}
+
+func (m *partialAttestationManager) getOrCreateAttestationStateByHash(
+	topic string,
+	slot int,
+	data []byte,
+	hash []byte,
+) *AttestationState {
 	ss := m.getOrCreateSlotState(topic, slot)
-	key := string(data)
+	key := attestationHashKey(hash)
 	b, ok := ss.attestationsMap[key]
 	if !ok {
-		b = newAttestationState(data)
+		b = newAttestationState(data, hash)
 		ss.attestationsMap[key] = b
+	} else if len(b.data) == 0 && len(data) > 0 {
+		b.data = slices.Clone(data)
 	}
 	return b
 }
@@ -263,7 +286,8 @@ func (m *partialAttestationManager) markValidated(topic string, slot int, data [
 	if ss == nil {
 		return
 	}
-	b, ok := ss.attestationsMap[string(data)]
+	hash := m.identities.remember(data)
+	b, ok := ss.attestationsMap[attestationHashKey(hash)]
 	if !ok {
 		return
 	}
@@ -340,7 +364,7 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 					if peerRequestsPartial(p) {
 						positions := m.claimAttestationsToSend(b, bps, ps.gossipPeer)
 						if len(positions) > 0 {
-							batch := m.encodeBatch(b, positions)
+							batch := m.encodeBatchForPeer(p, b, positions)
 							dataEnvelope.Batches = append(dataEnvelope.Batches, batch)
 							totalPositionsSent += len(positions)
 							attestationDataWithForwards++
@@ -368,6 +392,7 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 						wantList := wantPerPeerPerData[p][attDataStr]
 						md := getAttestationMetadata(b, m.committeeSize, slot, wantList, ps.sendAvailableList)
 						if md != nil {
+							m.setMetadataIdentityForPeer(p, b, md)
 							ctrlEnvelope.Metadatas = append(ctrlEnvelope.Metadatas, md)
 							m.logger.Info("partial_send_metadata",
 								"peer", shortPeer(p),
@@ -527,8 +552,9 @@ func getAttestationMetadata(
 	includeAvailable bool,
 ) *pb.CommitteeAttestationPartsMetadata {
 	md := &pb.CommitteeAttestationPartsMetadata{
-		Slot:            int32(slot),
-		AttestationData: b.data,
+		Slot:                int32(slot),
+		AttestationData:     b.data,
+		AttestationDataHash: b.dataHash,
 	}
 
 	if includeAvailable && len(b.validated) > 0 {
@@ -558,17 +584,45 @@ func getAttestationMetadata(
 // encodeBatch builds a BatchedAttestation for the given positions. Caller must
 // ensure all entries exist in b.attestations. AttestorIndices and Signatures
 // are emitted in the same order as `positions`.
-func (m *partialAttestationManager) encodeBatch(b *AttestationState, positions []int) *pb.BatchedAttestation {
+func (m *partialAttestationManager) encodeBatchForPeer(
+	p peer.ID,
+	b *AttestationState,
+	positions []int,
+) *pb.BatchedAttestation {
 	idxs := make([]uint32, 0, len(positions))
 	sigs := make([][]byte, 0, len(positions))
 	for _, pos := range positions {
 		idxs = append(idxs, uint32(pos))
 		sigs = append(sigs, b.attestations[pos].Signature)
 	}
-	return &pb.BatchedAttestation{
-		AttestationData: b.data,
+	batch := &pb.BatchedAttestation{
 		AttestorIndices: idxs,
 		Signatures:      sigs,
+	}
+	full := !peerSentFull(m.sentDataFull, p, b.dataHash) && len(b.data) > 0
+	setBatchIdentity(batch, b, full)
+	if full {
+		markPeerSentFull(m.sentDataFull, p, b.dataHash)
+	}
+	return batch
+}
+
+func (m *partialAttestationManager) encodeBatch(
+	b *AttestationState,
+	positions []int,
+) *pb.BatchedAttestation {
+	return m.encodeBatchForPeer("", b, positions)
+}
+
+func (m *partialAttestationManager) setMetadataIdentityForPeer(
+	p peer.ID,
+	b *AttestationState,
+	md *pb.CommitteeAttestationPartsMetadata,
+) {
+	full := !peerSentFull(m.sentMetaFull, p, b.dataHash) && len(b.data) > 0
+	setMetadataIdentity(md, b, full)
+	if full {
+		markPeerSentFull(m.sentMetaFull, p, b.dataHash)
 	}
 }
 
@@ -676,7 +730,12 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 	// Process metadatas first so that available/pendingWant is up-to-date
 	// when we later infer available from received attestations.
 	for _, md := range ctrl.Metadatas {
-		b := m.getOrCreateAttestationState(topic, slot, md.AttestationData)
+		data, hash, err := m.identities.resolve(md.AttestationData, md.AttestationDataHash, false)
+		if err != nil {
+			m.logger.Error("drop partial metadata", "from", shortPeer(from), "err", err)
+			continue
+		}
+		b := m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
 		bps := initAndGetPeerAttestationState(b, from, m.committeeSize)
 
 		available := bitmap.Bitmap(md.Available)
@@ -698,7 +757,7 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 			"from", shortPeer(from),
 			"slot", slot,
 			"topic", topicIdx,
-			"att_digest", attDigestHex(md.AttestationData),
+			"att_digest", attDigestHexFor(data, hash),
 			"available_ones", available.OnesCount(),
 			"requests_ones", requests.OnesCount(),
 		)
@@ -706,7 +765,16 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 
 	// Process data batches.
 	for _, batch := range dataEnv.Batches {
-		b := m.getOrCreateAttestationState(topic, slot, batch.AttestationData)
+		data, hash, err := m.identities.resolve(
+			batch.AttestationData,
+			batch.AttestationDataHash,
+			true,
+		)
+		if err != nil {
+			m.logger.Error("drop partial batch", "from", shortPeer(from), "err", err)
+			continue
+		}
+		b := m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
 		bps := initAndGetPeerAttestationState(b, from, m.committeeSize)
 
 		if len(batch.AttestorIndices) != len(batch.Signatures) {
@@ -727,7 +795,7 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 			"from", shortPeer(from),
 			"slot", slot,
 			"topic", topicIdx,
-			"att_digest", attDigestHex(batch.AttestationData),
+			"att_digest", attDigestHexFor(data, hash),
 			"positions_count", len(positions),
 			"new_positions", len(newEntries),
 			"batch_bytes", batchBytes,
@@ -739,7 +807,7 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 			latencyMs := time.Since(slotStart).Milliseconds()
 			for _, entry := range newEntries {
 				pe := entry.(*PartialAttestationEntry)
-				m.node.Tracer.OnPartialReceive(slot, topicIdx, pe.Position, batch.AttestationData, latencyMs)
+				m.node.Tracer.OnPartialReceive(slot, topicIdx, pe.Position, b.data, latencyMs)
 			}
 		}
 

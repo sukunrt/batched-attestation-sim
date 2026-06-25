@@ -1,6 +1,7 @@
 package attprop
 
 import (
+	"slices"
 	"sync"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -13,7 +14,7 @@ import (
 
 type bitmapKey struct {
 	slot int32
-	data string
+	hash string
 }
 
 // bitmapWriter owns one peer's outgoing bitmap stream. It keeps at most one
@@ -26,18 +27,20 @@ type bitmapWriter struct {
 	w      msgio.WriteCloser
 	work   chan struct{}
 
-	mu      sync.Mutex
-	pending map[bitmapKey]*pb.CommitteeAttestationPartsMetadata
-	closed  bool
+	mu       sync.Mutex
+	pending  map[bitmapKey]*pb.CommitteeAttestationPartsMetadata
+	sentFull map[string]struct{}
+	closed   bool
 }
 
 func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream) *bitmapWriter {
 	bw := &bitmapWriter{
-		peer:    p,
-		stream:  s,
-		w:       msgio.NewVarintWriter(s),
-		work:    make(chan struct{}, 1),
-		pending: make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata),
+		peer:     p,
+		stream:   s,
+		w:        msgio.NewVarintWriter(s),
+		work:     make(chan struct{}, 1),
+		pending:  make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata),
+		sentFull: make(map[string]struct{}),
 	}
 	go func() {
 		for range bw.work {
@@ -74,9 +77,25 @@ func (w *bitmapWriter) enqueueBitmaps(mds []*pb.CommitteeAttestationPartsMetadat
 	if w.closed {
 		return
 	}
+	if w.pending == nil {
+		w.pending = make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata)
+	}
+	if w.sentFull == nil {
+		w.sentFull = make(map[string]struct{})
+	}
 	for _, md := range mds {
-		key := bitmapKey{slot: md.Slot, data: string(md.AttestationData)}
+		hash, ok := bitmapMetadataHash(md)
+		if !ok {
+			continue
+		}
+		key := bitmapKey{slot: md.Slot, hash: attestationHashKey(hash)}
 		queued := proto.Clone(md).(*pb.CommitteeAttestationPartsMetadata)
+		queued.AttestationDataHash = hash
+		if _, sent := w.sentFull[key.hash]; sent {
+			queued.AttestationData = nil
+		} else if len(queued.AttestationData) == 0 && w.pending[key] != nil {
+			queued.AttestationData = w.pending[key].AttestationData
+		}
 		w.pending[key] = queued
 	}
 	select {
@@ -92,15 +111,34 @@ func (w *bitmapWriter) getNextBitmap() *pb.ControlEnvelope {
 	if len(w.pending) == 0 {
 		return nil
 	}
+	if w.sentFull == nil {
+		w.sentFull = make(map[string]struct{})
+	}
 
 	var mds []*pb.CommitteeAttestationPartsMetadata
-	for _, v := range w.pending {
+	for key, v := range w.pending {
+		v.AttestationDataHash = []byte(key.hash)
+		if _, sent := w.sentFull[key.hash]; sent || len(v.AttestationData) == 0 {
+			v.AttestationData = nil
+		} else {
+			w.sentFull[key.hash] = struct{}{}
+		}
 		mds = append(mds, v)
 	}
 	clear(w.pending)
 	return &pb.ControlEnvelope{
 		Metadatas: mds,
 	}
+}
+
+func bitmapMetadataHash(md *pb.CommitteeAttestationPartsMetadata) ([]byte, bool) {
+	if len(md.AttestationDataHash) > 0 {
+		return slices.Clone(md.AttestationDataHash), true
+	}
+	if len(md.AttestationData) > 0 {
+		return hashAttestationData(md.AttestationData), true
+	}
+	return nil, false
 }
 
 func (w *bitmapWriter) closeAndReset() {

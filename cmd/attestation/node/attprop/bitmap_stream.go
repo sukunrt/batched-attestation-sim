@@ -36,9 +36,10 @@ func (m *Manager) buildAvailableEnvelope(slot int) *pb.ControlEnvelope {
 			continue
 		}
 		ctrl.Metadatas = append(ctrl.Metadatas, &pb.CommitteeAttestationPartsMetadata{
-			Slot:            int32(slot),
-			AttestationData: b.data,
-			Available:       []byte(m.validatedBitmap(b)),
+			Slot:                int32(slot),
+			AttestationData:     b.data,
+			AttestationDataHash: b.dataHash,
+			Available:           []byte(m.validatedBitmap(b)),
 		})
 	}
 	if len(ctrl.Metadatas) == 0 {
@@ -115,9 +116,10 @@ func (m *Manager) changedAvailableEnvelope(
 		}
 		b.lastEmitted = avail
 		ctrl.Metadatas = append(ctrl.Metadatas, &pb.CommitteeAttestationPartsMetadata{
-			Slot:            int32(slot),
-			AttestationData: b.data,
-			Available:       []byte(avail),
+			Slot:                int32(slot),
+			AttestationData:     b.data,
+			AttestationDataHash: b.dataHash,
+			Available:           []byte(avail),
 		})
 	}
 	if len(ctrl.Metadatas) == 0 {
@@ -147,8 +149,13 @@ func (m *Manager) bitmapMeshPeers() []peer.ID {
 func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
 	for _, md := range ctrl.Metadatas {
 		slot := int(md.Slot)
+		data, hash, err := m.identities.resolve(md.AttestationData, md.AttestationDataHash, false)
+		if err != nil {
+			m.logger.Error("CRITICAL: attprop_drop_bitmap", "from", shortPeer(from), "err", err)
+			continue
+		}
 		ss := m.getOrCreateSlotState(slot)
-		b := ss.getOrCreateBucket(md.AttestationData)
+		b := ss.getOrCreateBucket(data, hash)
 
 		avail := bitmap.Bitmap(md.Available)
 		flips := 0
@@ -161,7 +168,7 @@ func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
 			"from", shortPeer(from),
 			"slot", slot,
 			"topic", m.cfg.TopicIndex,
-			"att_digest", attDigestHex(md.AttestationData),
+			"att_digest", attDigestHexFor(data, hash),
 			"available_ones", avail.OnesCount(),
 			"requests_ones", 0,
 			"holder_flips", flips,

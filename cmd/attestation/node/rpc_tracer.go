@@ -94,43 +94,51 @@ func classicAttStats(data []byte) (attDataBytes, sigBytes int, digest string) {
 // per signature), and the attestation_data and signature byte counts. The
 // attestation_data byte count is summed once per batch, so it reflects the
 // deduplicated cost partial mode pays versus classic. Best-effort on failure.
-func partialDataStats(blob []byte) (batches, attCount, attDataBytes, sigBytes int) {
+func partialDataStats(blob []byte) (
+	batches int,
+	attCount int,
+	attDataBytes int,
+	attDataHashBytes int,
+	sigBytes int,
+) {
 	if len(blob) == 0 {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	var env attpb.BatchedAttestationEnvelope
 	if err := gproto.Unmarshal(blob, &env); err != nil {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	batches = len(env.GetBatches())
 	for _, b := range env.GetBatches() {
 		attDataBytes += len(b.GetAttestationData())
+		attDataHashBytes += len(b.GetAttestationDataHash())
 		sigs := b.GetSignatures()
 		attCount += len(sigs)
 		for _, s := range sigs {
 			sigBytes += len(s)
 		}
 	}
-	return batches, attCount, attDataBytes, sigBytes
+	return batches, attCount, attDataBytes, attDataHashBytes, sigBytes
 }
 
 // partialMetaStats decodes a ControlEnvelope (the partial-message metadata blob)
 // and returns the number of per-bucket metadata entries plus the total
 // available/requests bits advertised across them. Best-effort on failure.
-func partialMetaStats(blob []byte) (mdCount, availOnes, reqOnes int) {
+func partialMetaStats(blob []byte) (mdCount, availOnes, reqOnes, attDataHashBytes int) {
 	if len(blob) == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	var ctrl attpb.ControlEnvelope
 	if err := gproto.Unmarshal(blob, &ctrl); err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	mdCount = len(ctrl.GetMetadatas())
 	for _, md := range ctrl.GetMetadatas() {
 		availOnes += availableOnes(md.GetAvailable())
 		reqOnes += requestsOnes(md.GetRequests())
+		attDataHashBytes += len(md.GetAttestationDataHash())
 	}
-	return mdCount, availOnes, reqOnes
+	return mdCount, availOnes, reqOnes, attDataHashBytes
 }
 
 // OnRPCSent dispatches an outgoing RPC to the classic-gossipsub and
@@ -250,8 +258,8 @@ func (t *RPCTracer) onPartialRPCSent(
 	if partial == nil {
 		return
 	}
-	dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
-	metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
+	dataBatches, attCount, attDataBytes, attDataHashBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
+	metaCount, availOnes, reqOnes, metaHashBytes := partialMetaStats(partial.GetPartsMetadata())
 	t.logger.Info("partial_sent",
 		"peer", shortPeer(peerID),
 		"topic", partial.GetTopicID(),
@@ -260,8 +268,10 @@ func (t *RPCTracer) onPartialRPCSent(
 		"data_batches", dataBatches,
 		"att_count", attCount,
 		"att_data_bytes", attDataBytes,
+		"att_data_hash_bytes", attDataHashBytes,
 		"sig_bytes", sigBytes,
 		"meta_count", metaCount,
+		"metadata_att_data_hash_bytes", metaHashBytes,
 		"available_ones", availOnes,
 		"requests_ones", reqOnes,
 		"took", duration.Milliseconds(),
@@ -385,8 +395,8 @@ func (t *RPCTracer) onPartialRPCReceived(
 	if partial == nil {
 		return
 	}
-	dataBatches, attCount, attDataBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
-	metaCount, availOnes, reqOnes := partialMetaStats(partial.GetPartsMetadata())
+	dataBatches, attCount, attDataBytes, attDataHashBytes, sigBytes := partialDataStats(partial.GetPartialMessage())
+	metaCount, availOnes, reqOnes, metaHashBytes := partialMetaStats(partial.GetPartsMetadata())
 	t.logger.Info("partial_received",
 		"peer", shortPeer(peerID),
 		"topic", partial.GetTopicID(),
@@ -395,8 +405,10 @@ func (t *RPCTracer) onPartialRPCReceived(
 		"data_batches", dataBatches,
 		"att_count", attCount,
 		"att_data_bytes", attDataBytes,
+		"att_data_hash_bytes", attDataHashBytes,
 		"sig_bytes", sigBytes,
 		"meta_count", metaCount,
+		"metadata_att_data_hash_bytes", metaHashBytes,
 		"available_ones", availOnes,
 		"requests_ones", reqOnes,
 		"took", duration.Milliseconds(),
