@@ -1,66 +1,50 @@
 package attprop
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
-	"slices"
 )
 
-func hashAttestationData(data []byte) []byte {
+func hash(data []byte) []byte {
 	sum := sha256.Sum256(data)
-	return slices.Clone(sum[:])
+	return sum[:]
 }
 
-func attDigestHexFromHash(hash []byte) string {
+func hexPrefix(hash []byte) string {
 	if len(hash) < 8 {
 		return ""
 	}
 	return hex.EncodeToString(hash[:8])
 }
 
-func attDigestHexFor(data, hash []byte) string {
-	if len(data) > 0 {
-		return attDigestHex(data)
+func digestHex(data, hash []byte) string {
+	if len(hash) > 0 {
+		return hexPrefix(hash)
 	}
-	return attDigestHexFromHash(hash)
+	return attDigestHex(data)
 }
 
-type attestationIdentityCache struct {
+type attestationDataCache struct {
 	hashToData map[string][]byte
 }
 
-func newAttestationIdentityCache() attestationIdentityCache {
-	return attestationIdentityCache{hashToData: make(map[string][]byte)}
+func newAttestationIdentityCache() attestationDataCache {
+	return attestationDataCache{hashToData: make(map[string][]byte)}
 }
 
-func (c *attestationIdentityCache) remember(data []byte) []byte {
+func (c *attestationDataCache) Put(data []byte) []byte {
 	if c.hashToData == nil {
 		c.hashToData = make(map[string][]byte)
 	}
-	hash := hashAttestationData(data)
-	key := string(hash)
-	if _, ok := c.hashToData[key]; !ok {
-		c.hashToData[key] = slices.Clone(data)
+	hash := (hash(data))
+	if _, ok := c.hashToData[string(hash)]; ok {
+		return hash
 	}
+	c.hashToData[string(hash)] = data
 	return hash
 }
 
-func (c *attestationIdentityCache) resolve(data, hash []byte, requireData bool) ([]byte, []byte, error) {
-	if len(data) > 0 {
-		computed := c.remember(data)
-		if len(hash) > 0 && !bytes.Equal(hash, computed) {
-			return nil, nil, fmt.Errorf("attestation_data_hash mismatch")
-		}
-		return c.hashToData[string(computed)], computed, nil
-	}
-	if len(hash) != sha256.Size {
-		return nil, nil, fmt.Errorf("missing attestation_data identity")
-	}
-	data, ok := c.hashToData[string(hash)]
-	if requireData && !ok {
-		return nil, nil, fmt.Errorf("unknown attestation_data_hash")
-	}
-	return data, slices.Clone(hash), nil
+func (c *attestationDataCache) Get(hash []byte) ([]byte, bool) {
+	d, ok := c.hashToData[string(hash)]
+	return d, ok
 }

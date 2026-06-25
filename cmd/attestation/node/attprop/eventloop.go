@@ -596,19 +596,25 @@ func (m *Manager) sendControl(p peer.ID, items []*pb.AttPropControlItem) {
 // latest active slot (the sim runs slots sequentially — see slotForData).
 func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope) {
 	for _, batch := range env.Batches {
-		data, hash, err := m.identities.resolve(
-			batch.AttestationData,
-			batch.AttestationDataHash,
-			true,
-		)
-		if err != nil {
-			m.logger.Error("CRITICAL: attprop_drop_data", "from", shortPeer(from), "err", err)
-			continue
+		var hash []byte
+		data := batch.AttestationData
+		if len(batch.AttestationData) == 0 {
+			var ok bool
+			hash = batch.AttestationDataHash
+			data, ok = m.identities.Get(hash)
+			if !ok {
+				m.logger.Error("CRITICAL: attprop_drop_data", "from", shortPeer(from), "err", "missing data or hash")
+				return
+			}
+		} else {
+			hash = m.identities.Put(data)
 		}
+
 		if len(batch.AttestorIndices) != len(batch.Signatures) {
 			m.logger.Error("CRITICAL: attprop_recv_bad_batch", "from", shortPeer(from))
 			continue
 		}
+
 		positions := make([]int, len(batch.AttestorIndices))
 		ok := true
 		for i, idx := range batch.AttestorIndices {
@@ -620,12 +626,12 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 			positions[i] = int(idx)
 		}
 		if !ok {
-			continue // drop the whole batch; positions[i]↔signatures[i] must align
+			return
 		}
+
 		slot := m.slotForHash(hash)
 		ss := m.getOrCreateSlotState(slot)
 		b := ss.getOrCreateBucket(data, hash)
-		newEntries := b.addReceived(positions, batch.Signatures)
 
 		// The sender holds everything it sent us — record it (bumps holder-count
 		// on the 0→1 flips), so scarcity reflects what the sender has.
@@ -633,11 +639,13 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 			ss.markHolder(b, from, pos)
 		}
 
+		newEntries := b.addReceived(positions, batch.Signatures)
+
 		m.logger.Info("partial_recv_batch",
 			"from", shortPeer(from),
 			"slot", slot,
 			"topic", m.cfg.TopicIndex,
-			"att_digest", attDigestHexFor(data, hash),
+			"att_digest", digestHex(data, hash),
 			"positions_count", len(positions),
 			"new_positions", len(newEntries),
 			"batch_bytes", proto.Size(batch),
@@ -674,12 +682,11 @@ func (m *Manager) onValidated(e validatedEvent) {
 	if ss == nil {
 		return
 	}
-	hash := m.identities.remember(e.data)
+	hash := m.identities.Put(e.data)
 	b, ok := ss.buckets[string(hash)]
 	if !ok {
 		return
 	}
-	digest := attDigestHex(e.data)
 	latencyMs := time.Since(m.slotStartTime(e.slot)).Milliseconds()
 	for _, entry := range e.entries {
 		pe := entry.(*attEntry)
@@ -688,12 +695,13 @@ func (m *Manager) onValidated(e validatedEvent) {
 		}
 		delete(b.validating, pe.Position)
 		b.validated[pe.Position] = struct{}{}
+
 		ss.indexAddValidated(string(b.dataHash), pe.Position, b.holderCount[pe.Position])
 		ss.validatedSinceEmit++
 		m.logger.Info("attestation_validated",
 			"slot", e.slot,
 			"topic", m.cfg.TopicIndex,
-			"att_digest", digest,
+			"att_digest", hexPrefix(hash),
 			"position", pe.Position,
 			"latency_ms", latencyMs,
 		)
@@ -715,7 +723,7 @@ func (m *Manager) maybeEmitBitmap(ss *slotState) {
 // partial_priority.publishLocal but from the eventloop goroutine (§F4).
 func (m *Manager) onPublishLocal(e publishLocalEvent) {
 	ss := m.getOrCreateSlotState(e.slot)
-	hash := m.identities.remember(e.data)
+	hash := m.identities.Put(e.data)
 	b := ss.getOrCreateBucket(e.data, hash)
 	if _, ok := b.atts[e.pos]; ok {
 		return

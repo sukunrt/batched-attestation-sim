@@ -66,15 +66,11 @@ func (l *countLevel) add(bucketKey string, pos int) {
 // remove deletes e and reports whether it was present (so callers can move an
 // entry only when it was actually indexed).
 func (l *countLevel) remove(bucketKey string, pos int) bool {
-	positions := l.entries[bucketKey]
-	if positions == nil {
+	if _, ok := l.entries[bucketKey][pos]; !ok {
 		return false
 	}
-	if _, ok := positions[pos]; !ok {
-		return false
-	}
-	delete(positions, pos)
-	if len(positions) == 0 {
+	delete(l.entries[bucketKey], pos)
+	if len(l.entries[bucketKey]) == 0 {
 		delete(l.entries, bucketKey)
 	}
 	return true
@@ -119,11 +115,7 @@ type slotState struct {
 
 // newBucket initialises empty per-(topic, slot, hash(attestation_data)) state.
 // data is cloned so the caller's frame buffer can be reused.
-func newBucket(data []byte, hashes ...[]byte) *bucket {
-	hash := hashAttestationData(data)
-	if len(hashes) > 0 {
-		hash = slices.Clone(hashes[0])
-	}
+func newBucket(data []byte, hash []byte) *bucket {
 	return &bucket{
 		data:        slices.Clone(data),
 		dataHash:    slices.Clone(hash),
@@ -155,11 +147,7 @@ func (ss *slotState) ensureLevel(k int) {
 
 // getOrCreateBucket returns (creating as needed) the bucket for attestation_data
 // hash within this slot.
-func (ss *slotState) getOrCreateBucket(data []byte, hashes ...[]byte) *bucket {
-	hash := hashAttestationData(data)
-	if len(hashes) > 0 {
-		hash = slices.Clone(hashes[0])
-	}
+func (ss *slotState) getOrCreateBucket(data []byte, hash []byte) *bucket {
 	key := string(hash)
 	b, ok := ss.buckets[key]
 	if !ok {
@@ -220,13 +208,14 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 	bm.Set(pos)
 	hc := b.holderCount[pos]
 	b.holderCount[pos] = hc + 1
-	// Only validated positions live in the index; bump is a no-op otherwise.
-	bk := string(b.dataHash)
 
-	if hc >= len(ss.levels) || !ss.levels[hc].remove(bk, pos) {
+	// Only validated positions live in the index; bump is a no-op otherwise.
+	// validated positions are added to levels
+	bk := string(b.dataHash)
+	ss.ensureLevel(hc + 1)
+	if !ss.levels[hc].remove(bk, pos) {
 		return true
 	}
-	ss.ensureLevel(hc + 1)
 	ss.levels[hc+1].add(bk, pos)
 	return true
 }

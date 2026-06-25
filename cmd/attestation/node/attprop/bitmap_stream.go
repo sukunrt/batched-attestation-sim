@@ -72,10 +72,6 @@ func bucketKeys(ss *slotState) []string {
 // emit (§D2). When not forced it is the +K trigger: emit slots whose
 // since-emit counter has reached K and reset that counter. Eventloop-only.
 func (m *Manager) emitBitmaps(forced bool) {
-	bitmapPeers := m.bitmapMeshPeers()
-	if len(bitmapPeers) == 0 {
-		return
-	}
 	for slot, ss := range m.slots {
 		if !forced && ss.validatedSinceEmit < bitmapTriggerK {
 			continue
@@ -84,16 +80,19 @@ func (m *Manager) emitBitmaps(forced bool) {
 		if ctrl == nil {
 			continue
 		}
-		for _, p := range bitmapPeers {
-			if w, ok := m.bitmapWriters[p]; ok {
-				w.enqueueBitmaps(ctrl.Metadatas)
+		count := 0
+		for p, w := range m.bitmapWriters {
+			if m.mesh.role(p) != roleBitmap {
+				continue
 			}
+			w.enqueueBitmaps(ctrl.Metadatas)
+			count++
 		}
 		ss.validatedSinceEmit = 0
 		m.logger.Debug("attprop_emit_bitmap",
 			"topic", m.cfg.TopicIndex,
 			"slot", slot, "buckets", len(ctrl.Metadatas), "forced", forced,
-			"peers", len(bitmapPeers))
+			"peers", count)
 	}
 }
 
@@ -128,19 +127,6 @@ func (m *Manager) changedAvailableEnvelope(
 	return ctrl
 }
 
-// bitmapMeshPeers returns the peers currently in our bitmap mesh, in sorted
-// order for deterministic sends.
-func (m *Manager) bitmapMeshPeers() []peer.ID {
-	var ps []peer.ID
-	for p := range m.bitmapWriters {
-		if m.mesh.role(p) == roleBitmap {
-			ps = append(ps, p)
-		}
-	}
-	slices.Sort(ps)
-	return ps
-}
-
 // onInboundBitmap folds a peer's advertised available bitmap into our state: for
 // each bucket metadata, mark the peer as holding every set bit (markHolder bumps
 // holder-count and the scarcity index on each 0→1 flip — §E1). The metadata
@@ -149,10 +135,18 @@ func (m *Manager) bitmapMeshPeers() []peer.ID {
 func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
 	for _, md := range ctrl.Metadatas {
 		slot := int(md.Slot)
-		data, hash, err := m.identities.resolve(md.AttestationData, md.AttestationDataHash, false)
-		if err != nil {
-			m.logger.Error("CRITICAL: attprop_drop_bitmap", "from", shortPeer(from), "err", err)
-			continue
+		data := md.AttestationData
+		var hash []byte
+		if len(data) > 0 {
+			hash = m.identities.Put(data)
+		} else {
+			hash = md.AttestationDataHash
+			var ok bool
+			data, ok = m.identities.Get(hash)
+			if !ok {
+				m.logger.Error("CRITICAL GOT BITMAP HASH WITHOUT MESSAGE", "from", from)
+				return
+			}
 		}
 		ss := m.getOrCreateSlotState(slot)
 		b := ss.getOrCreateBucket(data, hash)
@@ -168,7 +162,7 @@ func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
 			"from", shortPeer(from),
 			"slot", slot,
 			"topic", m.cfg.TopicIndex,
-			"att_digest", attDigestHexFor(data, hash),
+			"att_digest", digestHex(data, hash),
 			"available_ones", avail.OnesCount(),
 			"requests_ones", 0,
 			"holder_flips", flips,

@@ -140,7 +140,7 @@ type Manager struct {
 
 	// slots holds per-slot state with the holder-count scarcity index (§E).
 	slots      map[int]*slotState
-	identities attestationIdentityCache
+	identities attestationDataCache
 	sentFull   map[peer.ID]map[string]struct{}
 
 	// activeData counts in-flight data sends gated by the budget B. Push sends

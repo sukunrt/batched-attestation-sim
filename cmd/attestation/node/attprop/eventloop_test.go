@@ -72,7 +72,8 @@ func (m *Manager) inFlightByRole() (push, bitmap int) {
 // holder-count 0, so the scheduler has scarce data to send to every peer.
 func (m *Manager) seedValidated(slot int, positions ...int) *slotState {
 	ss := m.getOrCreateSlotState(slot)
-	b := ss.getOrCreateBucket([]byte("data"))
+	data := []byte("data")
+	b := ss.getOrCreateBucket(data, hash(data))
 	for _, pos := range positions {
 		b.atts[pos] = &attEntry{Position: pos, Signature: []byte{1}, Data: b.data}
 		b.validated[pos] = struct{}{}
@@ -141,7 +142,8 @@ func TestBudgetGateBitmapFillsSpare(t *testing.T) {
 func TestPushIgnoresBitmapHolderLimit(t *testing.T) {
 	m := schedManager(t, 1, 4, 1000)
 	ss := m.getOrCreateSlotState(1)
-	b := ss.getOrCreateBucket([]byte("data"))
+	data := []byte("data")
+	b := ss.getOrCreateBucket(data, hash(data))
 	b.atts[1] = &attEntry{Position: 1, Signature: []byte{1}, Data: b.data}
 	b.validated[1] = struct{}{}
 	b.holderCount[1] = 3
@@ -281,7 +283,7 @@ func TestInboundDataMarksHolder(t *testing.T) {
 
 	ss := m.getSlotState(1)
 	require.NotNil(t, ss)
-	b := ss.buckets[string(hashAttestationData(data))]
+	b := ss.buckets[string(hash(data))]
 	require.NotNil(t, b)
 	for _, pos := range []int{2, 9, 40} {
 		require.Equal(t, 1, b.holderCount[pos], "sender recorded as holder")
@@ -310,7 +312,7 @@ func TestInboundDataUnknownDataUsesCurrentSlot(t *testing.T) {
 	m.onInboundData(pid(7), &pb.BatchedAttestationEnvelope{Batches: []*pb.BatchedAttestation{{
 		AttestationData: makeData(1), AttestorIndices: []uint32{1}, Signatures: [][]byte{{1}},
 	}}})
-	require.NotNil(t, m.getSlotState(1).buckets[string(hashAttestationData(makeData(1)))])
+	require.NotNil(t, m.getSlotState(1).buckets[string(hash(makeData(1)))])
 
 	// The window advances to slot 2; new unseen data arrives. It must file under
 	// slot 2 even though the only bucket the node holds is slot 1's.
@@ -319,11 +321,11 @@ func TestInboundDataUnknownDataUsesCurrentSlot(t *testing.T) {
 		AttestationData: makeData(2), AttestorIndices: []uint32{2}, Signatures: [][]byte{{2}},
 	}}})
 
-	require.Nil(t, m.getSlotState(1).buckets[string(hashAttestationData(makeData(2)))],
+	require.Nil(t, m.getSlotState(1).buckets[string(hash(makeData(2)))],
 		"slot-2 data must not be filed under slot 1")
 	ss2 := m.getSlotState(2)
 	require.NotNil(t, ss2, "current wall-clock slot is 2")
-	require.NotNil(t, ss2.buckets[string(hashAttestationData(makeData(2)))], "unknown data filed under current slot")
+	require.NotNil(t, ss2.buckets[string(hash(makeData(2)))], "unknown data filed under current slot")
 }
 
 // TestInboundDataBadIndexDropsBatch: an out-of-range attestor index voids the
@@ -341,7 +343,7 @@ func TestInboundDataBadIndexDropsBatch(t *testing.T) {
 
 	ss := m.getSlotState(1)
 	if ss != nil {
-		if b := ss.buckets[string(hashAttestationData(data))]; b != nil {
+		if b := ss.buckets[string(hash(data))]; b != nil {
 			require.Empty(t, b.atts, "bad batch dropped wholesale")
 		}
 	}

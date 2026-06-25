@@ -62,7 +62,7 @@ func TestBitmapWriterKeepsFirstFullDataThroughCoalescing(t *testing.T) {
 	fullDataMetadata := testBitmapMetadata(1, "data", []byte{0x01})
 	hashOnly := testBitmapMetadata(1, "data", []byte{0x03})
 	hashOnly.AttestationData = nil
-	hashOnly.AttestationDataHash = hashAttestationData([]byte("data"))
+	hashOnly.AttestationDataHash = hash([]byte("data"))
 
 	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{fullDataMetadata})
 	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{hashOnly})
@@ -78,13 +78,14 @@ func TestBitmapWriterKeepsFirstFullDataThroughCoalescing(t *testing.T) {
 	second := w.getNextBitmap()
 	require.Len(t, second.Metadatas, 1)
 	require.Empty(t, second.Metadatas[0].AttestationData)
-	require.Equal(t, hashAttestationData([]byte("data")), second.Metadatas[0].AttestationDataHash)
+	require.Equal(t, hash([]byte("data")), second.Metadatas[0].AttestationDataHash)
 }
 
 func testBitmapWriter() *bitmapWriter {
 	return &bitmapWriter{
-		work:    make(chan struct{}, 1),
-		pending: make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata),
+		work:     make(chan struct{}, 1),
+		pending:  make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata),
+		sentFull: make(map[string]struct{}),
 	}
 }
 
@@ -110,8 +111,9 @@ func testBitmapMetadata(
 	available []byte,
 ) *pb.CommitteeAttestationPartsMetadata {
 	return &pb.CommitteeAttestationPartsMetadata{
-		Slot:            slot,
-		AttestationData: []byte(data),
-		Available:       available,
+		Slot:                slot,
+		AttestationData:     []byte(data),
+		AttestationDataHash: hash([]byte(data)),
+		Available:           available,
 	}
 }

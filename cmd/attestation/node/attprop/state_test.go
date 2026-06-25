@@ -72,7 +72,7 @@ const testCommittee = 64
 func newTestSlot(maxPeers int, validated ...int) (*slotState, *bucket) {
 	ss := newSlotState(1, maxPeers, testCommittee)
 	data := []byte("data-A")
-	b := ss.getOrCreateBucket(data)
+	b := ss.getOrCreateBucket(data, hash(data))
 	for _, pos := range validated {
 		b.atts[pos] = &attEntry{Position: pos, Signature: []byte{1}, Data: b.data}
 		b.validated[pos] = struct{}{}
@@ -85,7 +85,8 @@ func newTestSlot(maxPeers int, validated ...int) (*slotState, *bucket) {
 // and the holder-count index grows when needed.
 func TestIndexAddValidatedInvariant(t *testing.T) {
 	ss := newSlotState(1, 3, testCommittee)
-	b := ss.getOrCreateBucket([]byte("d"))
+	data := []byte("d")
+	b := ss.getOrCreateBucket(data, hash(data))
 	for _, pos := range []int{5, 9, 1} {
 		b.validated[pos] = struct{}{}
 		ss.indexAddValidated(bucketKey(b), pos, 0)
@@ -111,7 +112,8 @@ func TestIndexAddValidatedInvariant(t *testing.T) {
 // higher), regardless of position number.
 func TestScarcityAscendingOrder(t *testing.T) {
 	ss := newSlotState(1, 5, testCommittee)
-	b := ss.getOrCreateBucket([]byte("d"))
+	data := []byte("d")
+	b := ss.getOrCreateBucket(data, hash(data))
 	// Higher position numbers given LOWER holder-count, so a position-only sort
 	// would disagree with scarcity order — proving the level walk dominates.
 	for _, x := range []struct{ pos, hc int }{{30, 0}, {20, 1}, {10, 2}} {
@@ -142,7 +144,8 @@ func TestScarcityChunkCap(t *testing.T) {
 
 func TestSelectionHolderCountLimit(t *testing.T) {
 	ss := newSlotState(1, 2, testCommittee)
-	b := ss.getOrCreateBucket([]byte("d"))
+	data := []byte("d")
+	b := ss.getOrCreateBucket(data, hash(data))
 	for _, x := range []struct{ pos, hc int }{{10, 0}, {20, 1}, {30, 2}} {
 		b.atts[x.pos] = &attEntry{Position: x.pos, Data: b.data}
 		b.validated[x.pos] = struct{}{}
