@@ -119,19 +119,19 @@ func TestScarcityAscendingOrder(t *testing.T) {
 	checkIndexInvariant(t, ss)
 
 	// Cap large enough to take all three: all levels are visited scarcest-first.
-	chunk, more, _ := ss.selectOneChunkForPeer(pid(1), 10, true, noHolderCountLimit)
-	require.False(t, more)
+	chunk, held := ss.selectOneChunkForPeer(pid(1), 10, true, noHolderCountLimit)
+	require.False(t, held)
 	require.ElementsMatch(t, []int{30, 20, 10}, chunk[string(b.data)])
 }
 
-// TestScarcityChunkCapAndMore: with more validated positions than the cap, the
-// chunk holds the maxN scarcest and reports more=true.
-func TestScarcityChunkCapAndMore(t *testing.T) {
+// TestScarcityChunkCap: with more validated positions than the cap, the chunk
+// holds the maxN scarcest positions.
+func TestScarcityChunkCap(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3, 4, 5) // all hc 0
 	checkIndexInvariant(t, ss)
 
-	chunk, more, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
-	require.True(t, more, "5 candidates, cap 3 ⇒ more")
+	chunk, held := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
+	require.False(t, held)
 	require.Equal(t, 3, chunkLen(chunk))
 	require.Subset(t, []int{1, 2, 3, 4, 5}, chunk[string(b.data)])
 }
@@ -147,14 +147,12 @@ func TestSelectionHolderCountLimit(t *testing.T) {
 	}
 	checkIndexInvariant(t, ss)
 
-	chunk, more, held := ss.selectOneChunkForPeer(pid(1), 10, true, 2)
-	require.False(t, more)
+	chunk, held := ss.selectOneChunkForPeer(pid(1), 10, true, 2)
 	require.False(t, held)
 	require.ElementsMatch(t, []int{10, 20}, chunk[string(b.data)])
 	require.False(t, b.peerAvail[pid(1)].Get(30), "level 2 is outside limit < 2")
 
-	chunk, more, held = ss.selectOneChunkForPeer(pid(2), 10, true, noHolderCountLimit)
-	require.False(t, more)
+	chunk, held = ss.selectOneChunkForPeer(pid(2), 10, true, noHolderCountLimit)
 	require.False(t, held)
 	require.ElementsMatch(t, []int{10, 20, 30}, chunk[string(b.data)])
 	checkIndexInvariant(t, ss)
@@ -165,9 +163,8 @@ func TestSelectionHolderCountLimit(t *testing.T) {
 func TestSelectCanHoldPartialWithoutCommit(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2)
 
-	chunk, more, held := ss.selectOneChunkForPeer(pid(1), 3, false, noHolderCountLimit)
+	chunk, held := ss.selectOneChunkForPeer(pid(1), 3, false, noHolderCountLimit)
 	require.Nil(t, chunk)
-	require.False(t, more)
 	require.True(t, held)
 	for _, pos := range []int{1, 2} {
 		require.Equal(t, 0, b.holderCount[pos])
@@ -176,8 +173,7 @@ func TestSelectCanHoldPartialWithoutCommit(t *testing.T) {
 	require.Equal(t, 2, levelLen(ss.levels[0]))
 	checkIndexInvariant(t, ss)
 
-	chunk, more, held = ss.selectOneChunkForPeer(pid(1), 2, false, noHolderCountLimit)
-	require.False(t, more)
+	chunk, held = ss.selectOneChunkForPeer(pid(1), 2, false, noHolderCountLimit)
 	require.False(t, held)
 	require.ElementsMatch(t, []int{1, 2}, chunk[string(b.data)])
 }
@@ -187,7 +183,7 @@ func TestSelectCanHoldPartialWithoutCommit(t *testing.T) {
 // re-draw next pass).
 func TestCommitAsDrawnReordersLevels(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3)
-	chunk, _, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
+	chunk, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
 	require.ElementsMatch(t, []int{1, 2, 3}, chunk[string(b.data)])
 
 	// After the draw: holderCount 1 for each, entries now in level 1, peer holds.
@@ -200,9 +196,9 @@ func TestCommitAsDrawnReordersLevels(t *testing.T) {
 	checkIndexInvariant(t, ss)
 
 	// Same peer again ⇒ nothing left (it already holds all).
-	chunk2, more2, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
+	chunk2, held2 := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
 	require.Nil(t, chunk2)
-	require.False(t, more2)
+	require.False(t, held2)
 }
 
 // TestCommitAsDrawnSpreadsAcrossPeers: serving peer A then peer B in one pass —
@@ -211,7 +207,7 @@ func TestCommitAsDrawnReordersLevels(t *testing.T) {
 func TestCommitAsDrawnSpreadsAcrossPeers(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2, 3)
 
-	cA, _, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
+	cA, _ := ss.selectOneChunkForPeer(pid(1), 3, true, noHolderCountLimit)
 	require.ElementsMatch(t, []int{1, 2, 3}, cA[string(b.data)])
 	for _, pos := range []int{1, 2, 3} {
 		require.Equal(t, 1, b.holderCount[pos], "after A: hc 1")
@@ -219,7 +215,7 @@ func TestCommitAsDrawnSpreadsAcrossPeers(t *testing.T) {
 
 	// B lacks 1,2,3 (A's draw only set A's available), so B draws them too; each
 	// goes from hc 1 → 2.
-	cB, _, _ := ss.selectOneChunkForPeer(pid(2), 3, true, noHolderCountLimit)
+	cB, _ := ss.selectOneChunkForPeer(pid(2), 3, true, noHolderCountLimit)
 	require.ElementsMatch(t, []int{1, 2, 3}, cB[string(b.data)])
 	for _, pos := range []int{1, 2, 3} {
 		require.Equal(t, 2, b.holderCount[pos], "after B: hc 2")
@@ -247,7 +243,7 @@ func TestPopcountOnFlip(t *testing.T) {
 // holder-count, the peer's available bit, and the index level all return.
 func TestRollbackChunkRestores(t *testing.T) {
 	ss, b := newTestSlot(10, 1, 2)
-	chunk, _, _ := ss.selectOneChunkForPeer(pid(1), 2, true, noHolderCountLimit)
+	chunk, _ := ss.selectOneChunkForPeer(pid(1), 2, true, noHolderCountLimit)
 	require.Equal(t, 2, chunkLen(chunk))
 	require.Equal(t, 2, levelLen(ss.levels[1]))
 

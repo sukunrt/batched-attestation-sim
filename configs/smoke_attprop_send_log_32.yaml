@@ -1,0 +1,41 @@
+# Local smoke: confirm attprop INFO send-side logging (attprop_send_data) and
+# bitmapD=0 (bitmap mesh disabled) flow end-to-end on a tiny topology.
+
+topology:
+  num_nodes: 32
+  degree: 16
+  type: random
+  seed: 42
+  super_node_fraction: 0.0
+  fanout_nodes_per_topic: 8
+  fanout_node_mesh_peers: 2
+  latency_multiple: 1.0
+  min_node_to_node_latency_ms: 0
+
+simulations:
+  - gossipsub_params:
+      D: 8
+      Dlow: 6
+      Dhigh: 12
+    num_topics: 1
+    num_slots: 2
+    slot_duration_seconds: 6
+    num_attestors: 32
+    attestation_data_size: 128
+    signature_size: 96
+    attestation_validation_delay_ms: 10
+    attestation_validation_std_dev_ms: 3
+    validation_batch_window_ms: 10
+    per_attestation_validation_us: 100
+    stop_time_minutes: 3.5
+    log_level: info
+    bandwidth_log_frequency_ms: 200
+    divergent_attestor_fraction: 0.0
+    att_propagation: true
+    max_attestations_per_message: 8
+    attprop_push_dlow: 6
+    attprop_push_d: 8
+    attprop_push_dhigh: 12
+    attprop_bitmap_dlow: 0
+    attprop_bitmap_d: 0
+    attprop_bitmap_dhigh: 0

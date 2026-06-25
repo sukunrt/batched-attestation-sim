@@ -18,35 +18,34 @@ type bitmapKey struct {
 
 // bitmapWriter owns one peer's outgoing bitmap stream. It keeps at most one
 // queued advertisement per (slot, attestation_data), replacing stale queued
-// state with the newest bitmap instead of dropping the update under backpressure.
+// state with the newest bitmap and coalescing pending advertisements into one
+// frame per write wakeup.
 type bitmapWriter struct {
 	peer   peer.ID
 	stream network.Stream
 	w      msgio.WriteCloser
-	work   chan bitmapKey
+	work   chan struct{}
 
 	mu      sync.Mutex
 	pending map[bitmapKey]*pb.CommitteeAttestationPartsMetadata
 	closed  bool
 }
 
-func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream, buf int) *bitmapWriter {
+func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream) *bitmapWriter {
 	bw := &bitmapWriter{
 		peer:    p,
 		stream:  s,
 		w:       msgio.NewVarintWriter(s),
-		work:    make(chan bitmapKey, buf),
+		work:    make(chan struct{}, 1),
 		pending: make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata),
 	}
 	go func() {
-		for key := range bw.work {
-			md := bw.pop(key)
+		for range bw.work {
+			md := bw.getNextBitmap()
 			if md == nil {
 				continue
 			}
-			frame, err := proto.Marshal(&pb.ControlEnvelope{
-				Metadatas: []*pb.CommitteeAttestationPartsMetadata{md},
-			})
+			frame, err := proto.Marshal(md)
 			if err != nil {
 				m.logger.Error("marshal bitmap", "topic", m.cfg.TopicIndex, "err", err)
 				continue
@@ -66,83 +65,53 @@ func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream, buf int) *bitmapW
 	return bw
 }
 
-func (w *bitmapWriter) enqueueBitmap(md *pb.CommitteeAttestationPartsMetadata) (
-	replaced bool,
-	dropped bool,
-	ok bool,
-) {
-	if md == nil {
-		return false, false, false
+func (w *bitmapWriter) enqueueBitmaps(mds []*pb.CommitteeAttestationPartsMetadata) {
+	if len(mds) == 0 {
+		return
 	}
-	key := bitmapKey{slot: md.Slot, data: string(md.AttestationData)}
-	queued := proto.Clone(md).(*pb.CommitteeAttestationPartsMetadata)
-
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
-		return false, false, false
+		return
 	}
-	if _, exists := w.pending[key]; exists {
+	for _, md := range mds {
+		key := bitmapKey{slot: md.Slot, data: string(md.AttestationData)}
+		queued := proto.Clone(md).(*pb.CommitteeAttestationPartsMetadata)
 		w.pending[key] = queued
-		return true, false, true
 	}
 	select {
-	case w.work <- key:
-		w.pending[key] = queued
-		return false, false, true
+	case w.work <- struct{}{}:
 	default:
-	}
-
-	select {
-	case old := <-w.work:
-		delete(w.pending, old)
-		dropped = true
-	default:
-	}
-	select {
-	case w.work <- key:
-		w.pending[key] = queued
-		return false, dropped, true
-	default:
-		return false, dropped, false
 	}
 }
 
-func (w *bitmapWriter) pop(key bitmapKey) *pb.CommitteeAttestationPartsMetadata {
+func (w *bitmapWriter) getNextBitmap() *pb.ControlEnvelope {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	md := w.pending[key]
-	delete(w.pending, key)
-	return md
+
+	if len(w.pending) == 0 {
+		return nil
+	}
+
+	var mds []*pb.CommitteeAttestationPartsMetadata
+	for _, v := range w.pending {
+		mds = append(mds, v)
+	}
+	clear(w.pending)
+	return &pb.ControlEnvelope{
+		Metadatas: mds,
+	}
 }
 
 func (w *bitmapWriter) closeAndReset() {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	if !w.closed {
 		w.closed = true
 		clear(w.pending)
 		close(w.work)
 	}
-	w.mu.Unlock()
 	if w.stream != nil {
 		w.stream.Reset()
-	}
-}
-
-func (m *Manager) enqueueBitmap(
-	w *bitmapWriter,
-	md *pb.CommitteeAttestationPartsMetadata,
-	what string,
-) {
-	replaced, dropped, ok := w.enqueueBitmap(md)
-	if !ok {
-		m.logger.Debug("drop bitmap, writer closed", "peer", shortPeer(w.peer), "what", what)
-		return
-	}
-	if replaced {
-		m.logger.Debug("replace queued bitmap", "peer", shortPeer(w.peer), "what", what)
-	}
-	if dropped {
-		m.logger.Debug("drop stale bitmap, writer full", "peer", shortPeer(w.peer), "what", what)
 	}
 }

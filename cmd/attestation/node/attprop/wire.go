@@ -186,6 +186,9 @@ func (m *Manager) readLoop(
 		if err != nil {
 			r.ReleaseMsg(b)
 			if errors.Is(err, io.EOF) {
+				// TODO: check if we have len(b) > 0
+				// panic if we do. Just want to confirm this works correctly.
+				//
 				// Clean close at a frame boundary. Be nice and close our side.
 				_ = s.Close()
 			} else if !errors.Is(err, context.Canceled) {

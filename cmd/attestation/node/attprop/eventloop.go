@@ -287,7 +287,7 @@ func (m *Manager) onPeerUp(e peerUpEvent) {
 	m.senders[e.peer] = m.newPeerSender(e.peer, e.push, 1, func() {
 		m.post(sendDoneEvent{peer: e.peer})
 	})
-	m.bitmapWriters[e.peer] = m.newBitmapWriter(e.peer, e.bitmap, writerBuf)
+	m.bitmapWriters[e.peer] = m.newBitmapWriter(e.peer, e.bitmap)
 	m.controlWriters[e.peer] = m.newPeerSender(e.peer, e.control, writerBuf, nil)
 	m.mesh.roles[e.peer] = roleConnected
 	m.logger.Debug("peer_up", "topic", m.cfg.TopicIndex, "peer", shortPeer(e.peer))
@@ -330,11 +330,13 @@ func (m *Manager) onSendDone(p peer.ID) {
 	}
 }
 
-// onTick starts a push-drain pass: partial push batches flush too (§F4), and
-// keep flushing across send completions until no push peer has sendable data.
+// onTick runs one push-drain selection pass where partial push batches flush too
+// (§F4). Later send completions go back to holding partial chunks until the next
+// tick.
 func (m *Manager) onTick() {
 	m.sendAllToPushMesh = true
 	m.trySelectAndSend()
+	m.sendAllToPushMesh = false
 }
 
 // onHeartbeat runs mesh maintenance: gather connected candidates, call the mesh
@@ -376,9 +378,7 @@ func (m *Manager) sendFullBitmapTo(p peer.ID) {
 		if ctrl == nil {
 			continue
 		}
-		for _, md := range ctrl.Metadatas {
-			m.enqueueBitmap(w, md, "bitmap_full")
-		}
+		w.enqueueBitmaps(ctrl.Metadatas)
 	}
 }
 
@@ -415,34 +415,23 @@ func (m *Manager) onInboundControl(from peer.ID, ctrl *pb.AttPropControl) {
 //
 //  1. Push, exempt from B: for each push peer with no in-flight send, select its
 //     scarcest <= N chunk. A full chunk (N items) is sent immediately; a partial
-//     chunk is selected only while draining after a tick (sendAllToPushMesh).
+//     chunk is selected only during a tick pass (sendAllToPushMesh).
 //  2. Bitmap, gated: for each bitmap peer with no in-flight send while
 //     activeData < B, send its scarcest chunk, but only from holder-count levels
 //     below pushPeers + bitmapPeers/2.
 func (m *Manager) trySelectAndSend() {
-	pushDrained := true
 	for p, s := range m.senders {
-		if m.mesh.role(p) != rolePush {
-			continue
-		}
-		if s.inFlight {
-			pushDrained = false
+		if s.inFlight || m.mesh.role(p) != rolePush {
 			continue
 		}
 		chunk, ss := m.selectForPeer(p, m.sendAllToPushMesh, noHolderCountLimit)
 		if chunk == nil {
 			continue
 		}
-		pushDrained = false
 		m.send(p, ss, chunk)
 	}
-	// Once every push peer is idle and has no selectable chunk left, the tick's
-	// partial-push drain is complete.
-	if pushDrained && m.sendAllToPushMesh {
-		m.sendAllToPushMesh = false
-	}
 	push, bitmapPeers := m.mesh.counts()
-	bitmapHolderLimit := push + bitmapPeers/2
+	bitmapHolderLimit := (push + (bitmapPeers / 2) + 1)
 	for p, s := range m.senders {
 		if m.activeData >= m.cfg.SendBudgetB {
 			break
@@ -469,7 +458,7 @@ func (m *Manager) selectForPeer(
 	maxHolderCount int,
 ) (map[string][]int, *slotState) {
 	for _, ss := range m.slots {
-		chunk, _, held := ss.selectOneChunkForPeer(
+		chunk, held := ss.selectOneChunkForPeer(
 			p,
 			m.cfg.MaxAttsPerMessage,
 			allowPartial,
@@ -556,7 +545,7 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 	}
 	s.inFlight = true
 	m.activeData++
-	m.logger.Debug("attprop_send_data",
+	m.logger.Info("attprop_send_data",
 		"peer", shortPeer(p),
 		"topic", m.cfg.TopicIndex,
 		"role", int(m.mesh.role(p)),
@@ -594,14 +583,14 @@ func (m *Manager) sendControl(p peer.ID, items []*pb.AttPropControlItem) {
 func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope) {
 	for _, batch := range env.Batches {
 		if len(batch.AttestorIndices) != len(batch.Signatures) {
-			m.logger.Warn("attprop_recv_bad_batch", "from", shortPeer(from))
+			m.logger.Error("CRITICAL: attprop_recv_bad_batch", "from", shortPeer(from))
 			continue
 		}
 		positions := make([]int, len(batch.AttestorIndices))
 		ok := true
 		for i, idx := range batch.AttestorIndices {
 			if int(idx) >= m.cfg.CommitteeSize {
-				m.logger.Warn("attprop_recv_bad_index", "from", shortPeer(from), "idx", idx)
+				m.logger.Error("CRITICAL: attprop_recv_bad_index", "from", shortPeer(from), "idx", idx)
 				ok = false
 				break
 			}

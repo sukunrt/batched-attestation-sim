@@ -205,28 +205,25 @@ func TestPushPartialHeldUntilTick(t *testing.T) {
 	require.Equal(t, 1, push, "partial push batch flushed on tick")
 }
 
-func TestPushTickDrainsUntilNoSendableData(t *testing.T) {
+func TestPushTickFlushesPartialOnlyDuringTickPass(t *testing.T) {
 	m := schedManager(t, 2, 4, 1000)
 	m.seedValidated(1, 1, 2, 3) // one full chunk, then one partial chunk
 	m.addFakeSender(pid(0), rolePush)
 
 	m.onTick()
 	k := pid(0)
-	require.True(t, m.sendAllToPushMesh, "tick drain stays active while push is in flight")
+	require.False(t, m.sendAllToPushMesh, "tick partial permission is one selection pass")
 	require.True(t, m.senders[k].inFlight)
 	require.Len(t, m.senders[k].work, 1)
 
 	<-m.senders[k].work
 	m.dispatch(sendDoneEvent{peer: k})
-	require.True(t, m.sendAllToPushMesh, "tick drain stays active for the final partial")
-	require.True(t, m.senders[k].inFlight)
-	require.Len(t, m.senders[k].work, 1)
-
-	<-m.senders[k].work
-	m.dispatch(sendDoneEvent{peer: k})
-	require.False(t, m.sendAllToPushMesh, "tick drain stops only after push data is drained")
-	require.False(t, m.senders[k].inFlight)
+	require.False(t, m.senders[k].inFlight, "final partial waits for the next tick")
 	require.Len(t, m.senders[k].work, 0)
+
+	m.onTick()
+	require.True(t, m.senders[k].inFlight, "next tick flushes the held partial")
+	require.Len(t, m.senders[k].work, 1)
 }
 
 // TestPushFullSentImmediately: a push peer with ≥ N scarce positions is sent

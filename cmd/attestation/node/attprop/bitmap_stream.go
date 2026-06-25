@@ -85,9 +85,7 @@ func (m *Manager) emitBitmaps(forced bool) {
 		}
 		for _, p := range bitmapPeers {
 			if w, ok := m.bitmapWriters[p]; ok {
-				for _, md := range ctrl.Metadatas {
-					m.enqueueBitmap(w, md, "bitmap")
-				}
+				w.enqueueBitmaps(ctrl.Metadatas)
 			}
 		}
 		ss.validatedSinceEmit = 0

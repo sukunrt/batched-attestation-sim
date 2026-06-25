@@ -9,51 +9,75 @@ import (
 )
 
 func TestBitmapWriterReplacesQueuedBitmapByAttestationData(t *testing.T) {
-	w := testBitmapWriter(1)
+	w := testBitmapWriter()
 	first := testBitmapMetadata(1, "data", []byte{0x01})
 	latest := testBitmapMetadata(1, "data", []byte{0x03})
 
-	replaced, dropped, ok := w.enqueueBitmap(first)
-	require.True(t, ok)
-	require.False(t, replaced)
-	require.False(t, dropped)
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{first})
 	require.Len(t, w.work, 1)
 
-	replaced, dropped, ok = w.enqueueBitmap(latest)
-	require.True(t, ok)
-	require.True(t, replaced)
-	require.False(t, dropped)
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{latest})
 	require.Len(t, w.work, 1)
 
-	md := w.pop(<-w.work)
+	<-w.work
+	env := w.getNextBitmap()
+	require.Len(t, env.Metadatas, 1)
+	md := env.Metadatas[0]
 	require.Equal(t, []byte{0x03}, md.Available)
+	require.Empty(t, w.pending)
 }
 
-func TestBitmapWriterEnqueuesNewestBitmapWhenFull(t *testing.T) {
-	w := testBitmapWriter(1)
-	old := testBitmapMetadata(1, "old", []byte{0x01})
-	latest := testBitmapMetadata(1, "latest", []byte{0x02})
+func TestBitmapWriterCoalescesPendingBitmaps(t *testing.T) {
+	w := testBitmapWriter()
+	first := testBitmapMetadata(1, "first", []byte{0x01})
+	second := testBitmapMetadata(1, "second", []byte{0x02})
 
-	_, _, ok := w.enqueueBitmap(old)
-	require.True(t, ok)
-	replaced, dropped, ok := w.enqueueBitmap(latest)
-	require.True(t, ok)
-	require.False(t, replaced)
-	require.True(t, dropped)
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{first, second})
 	require.Len(t, w.work, 1)
 
-	md := w.pop(<-w.work)
-	require.Equal(t, []byte("latest"), md.AttestationData)
-	require.Equal(t, []byte{0x02}, md.Available)
-	_, ok = w.pending[bitmapKey{slot: old.Slot, data: string(old.AttestationData)}]
-	require.False(t, ok)
+	<-w.work
+	env := w.getNextBitmap()
+	require.Len(t, env.Metadatas, 2)
+	requireBitmapAvailable(t, env, "first", []byte{0x01})
+	requireBitmapAvailable(t, env, "second", []byte{0x02})
+	require.Empty(t, w.pending)
+	require.Nil(t, w.getNextBitmap())
 }
 
-func testBitmapWriter(buf int) *bitmapWriter {
+func TestBitmapWriterClonesQueuedMetadata(t *testing.T) {
+	w := testBitmapWriter()
+	md := testBitmapMetadata(1, "data", []byte{0x01})
+
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{md})
+	md.Available[0] = 0xff
+
+	<-w.work
+	env := w.getNextBitmap()
+	require.Len(t, env.Metadatas, 1)
+	require.Equal(t, []byte{0x01}, env.Metadatas[0].Available)
+}
+
+func testBitmapWriter() *bitmapWriter {
 	return &bitmapWriter{
-		work:    make(chan bitmapKey, buf),
+		work:    make(chan struct{}, 1),
 		pending: make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata),
 	}
+}
+
+func requireBitmapAvailable(
+	t *testing.T,
+	env *pb.ControlEnvelope,
+	data string,
+	available []byte,
+) {
+	t.Helper()
+	for _, md := range env.Metadatas {
+		if string(md.AttestationData) == data {
+			require.Equal(t, available, md.Available)
+			return
+		}
+	}
+	t.Fatalf("metadata for %q not found", data)
 }
 
 func testBitmapMetadata(

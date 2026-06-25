@@ -146,8 +146,8 @@ type Manager struct {
 	activeData int
 
 	// sendAllToPushMesh is eventloop-local tick state (§F4): true only during a
-	// tickEvent's selection pass so partial push batches flush on the tick;
-	// false otherwise. Never observed across a channel hop.
+	// tickEvent's selection pass so partial push batches flush on the tick; false
+	// otherwise. Never observed across a channel hop.
 	sendAllToPushMesh bool
 
 	// streamsMu guards stream setup state, which is intentionally outside the

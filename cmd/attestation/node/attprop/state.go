@@ -194,21 +194,6 @@ func (ss *slotState) indexAddValidated(bk string, pos, holderCount int) {
 	ss.levels[holderCount].add(bk, pos)
 }
 
-// indexBumpHolder moves a validated entry from level `from` to `from+1` after a
-// peer's available bit for the position flipped 0→1 (via a received bitmap, a
-// peer's data send to us, or our send to them — §E1). It is a no-op for
-// positions not currently indexed (e.g. a holder flip on a position still
-// validating): only an entry actually present in `from` is moved, so the index
-// keeps holding only validated positions.
-func (ss *slotState) indexBumpHolder(bk string, pos, from int) {
-	if from >= len(ss.levels) || !ss.levels[from].remove(bk, pos) {
-		return
-	}
-	to := from + 1
-	ss.ensureLevel(to)
-	ss.levels[to].add(bk, pos)
-}
-
 // markHolder records that peer p now holds position pos in bucket b: it sets the
 // peer's available bit, and — only on a genuine 0→1 flip — increments
 // holderCount and bumps the scarcity index. Returns whether the flip happened.
@@ -224,7 +209,13 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 	hc := b.holderCount[pos]
 	b.holderCount[pos] = hc + 1
 	// Only validated positions live in the index; bump is a no-op otherwise.
-	ss.indexBumpHolder(string(b.data), pos, hc)
+	bk := string(b.data)
+
+	if hc >= len(ss.levels) || !ss.levels[hc].remove(bk, pos) {
+		return true
+	}
+	ss.ensureLevel(hc + 1)
+	ss.levels[hc+1].add(bk, pos)
 	return true
 }
 
@@ -234,10 +225,8 @@ func (ss *slotState) markHolder(b *bucket, p peer.ID, pos int) bool {
 // commit-as-drawn spreading of §E2. maxHolderCount is an exclusive upper bound
 // on selected holder-count levels; noHolderCountLimit scans all levels. It
 // returns the chunk as bucketKey->positions in priority order (nil when the peer
-// has nothing left to receive within the limit) plus `more`: whether the peer
-// needs additional positions we hold beyond this chunk. If allowPartial is
-// false, a non-full chunk is held by returning nil, held=true before committing
-// it.
+// has nothing left to receive within the limit). If allowPartial is false, a
+// non-full chunk is held by returning nil, held=true before committing it.
 //
 // Candidates are collected read-only per level first, then committed, so the
 // index mutation in markHolder can't perturb the in-progress scan. Entries in
@@ -247,13 +236,14 @@ func (ss *slotState) selectOneChunkForPeer(
 	maxN int,
 	allowPartial bool,
 	maxHolderCount int,
-) (chunk map[string][]int, more bool, held bool) {
+) (chunk map[string][]int, held bool) {
 	var drawn []candidate
 	levelLimit := len(ss.levels)
 	if maxHolderCount >= 0 && maxHolderCount < levelLimit {
 		levelLimit = maxHolderCount
 	}
-	for k := 0; k < levelLimit && !more; k++ {
+OUTER:
+	for k := 0; k < levelLimit; k++ {
 		for bucketKey, positions := range ss.levels[k].entries {
 			b := ss.buckets[bucketKey]
 			if b == nil {
@@ -265,21 +255,17 @@ func (ss *slotState) selectOneChunkForPeer(
 					continue
 				}
 				if len(drawn) == maxN {
-					more = true // a needed candidate exists beyond this chunk
-					break
+					break OUTER
 				}
 				drawn = append(drawn, candidate{bucketKey, pos})
-			}
-			if more {
-				break
 			}
 		}
 	}
 	if len(drawn) == 0 {
-		return nil, false, false
+		return nil, false
 	}
-	if !allowPartial && !more && len(drawn) < maxN {
-		return nil, false, true
+	if !allowPartial && len(drawn) < maxN {
+		return nil, true
 	}
 
 	chunk = make(map[string][]int)
@@ -288,7 +274,7 @@ func (ss *slotState) selectOneChunkForPeer(
 		chunk[e.bucketKey] = append(chunk[e.bucketKey], e.pos)
 		ss.markHolder(b, p, e.pos)
 	}
-	return chunk, more, false
+	return chunk, false
 }
 
 // encodeBatch builds a BatchedAttestation for the given positions, emitting
