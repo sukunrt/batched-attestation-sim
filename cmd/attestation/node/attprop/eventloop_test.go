@@ -1,8 +1,10 @@
 package attprop
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,6 +230,42 @@ func TestPushTickFlushesPartialOnlyDuringTickPass(t *testing.T) {
 	m.onTick()
 	require.True(t, m.senders[k].inFlight, "next tick flushes the held partial")
 	require.Len(t, m.senders[k].work, 1)
+}
+
+func TestLogMeshHeartbeatEmitsPeerRTTsThenSummaries(t *testing.T) {
+	var buf bytes.Buffer
+	m := schedManager(t, 30, 4, 1000)
+	m.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{}))
+	m.addFakeSender(pid(2), rolePush)
+	m.addFakeSender(pid(1), roleBitmap)
+	m.addFakeSender(pid(3), roleBitmap)
+
+	m.logMeshHeartbeat()
+
+	log := buf.String()
+	for _, want := range []string{
+		"msg=attprop_mesh_peer_rtt",
+		"mesh=bitmap",
+		"mesh=push",
+		"peer_id=" + pid(1).String(),
+		"peer_id=" + pid(2).String(),
+		"peer_id=" + pid(3).String(),
+		"smoothedRTT_ms=-1",
+		"msg=attprop_bitmap_mesh",
+		"msg=attprop_push_mesh",
+		"size=2",
+		"size=1",
+		"rtt_ms=-1",
+		"rtt_samples=0",
+	} {
+		require.Contains(t, log, want)
+	}
+
+	firstPeer := strings.Index(log, "msg=attprop_mesh_peer_rtt")
+	firstSummary := strings.Index(log, "msg=attprop_bitmap_mesh")
+	require.NotEqual(t, -1, firstPeer)
+	require.NotEqual(t, -1, firstSummary)
+	require.Less(t, firstPeer, firstSummary, "peer RTT rows must precede mesh summaries")
 }
 
 // TestPushFullSentImmediately: a push peer with ≥ N scarce positions is sent

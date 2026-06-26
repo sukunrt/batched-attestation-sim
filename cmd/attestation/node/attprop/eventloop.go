@@ -2,11 +2,13 @@ package attprop
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
+	"github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ethp2p/simlab/cmd/attestation/pb"
@@ -412,6 +414,85 @@ func (m *Manager) onHeartbeat() {
 		m.sendControl(p, items)
 		m.logger.Debug("prune", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "items", len(items))
 	}
+	m.logMeshHeartbeat()
+}
+
+// logMeshHeartbeat emits one post-maintenance snapshot per heartbeat: first
+// each mesh peer's RTT, then one size/average-RTT row for each mesh.
+func (m *Manager) logMeshHeartbeat() {
+	pushPeers, bitmapPeers := m.meshPeers()
+	m.logMeshPeerRTTs("bitmap", bitmapPeers)
+	m.logMeshPeerRTTs("push", pushPeers)
+	m.logMeshSummary("bitmap", bitmapPeers)
+	m.logMeshSummary("push", pushPeers)
+}
+
+func (m *Manager) meshPeers() (pushPeers, bitmapPeers []peer.ID) {
+	for p, r := range m.mesh.roles {
+		switch r {
+		case rolePush:
+			pushPeers = append(pushPeers, p)
+		case roleBitmap:
+			bitmapPeers = append(bitmapPeers, p)
+		}
+	}
+	slices.Sort(pushPeers)
+	slices.Sort(bitmapPeers)
+	return pushPeers, bitmapPeers
+}
+
+func (m *Manager) logMeshPeerRTTs(mesh string, peers []peer.ID) {
+	for _, p := range peers {
+		rtt, ok := m.peerRTT(p)
+		rttMs := int64(-1)
+		if ok {
+			rttMs = rtt.Milliseconds()
+		}
+		m.logger.Info("attprop_mesh_peer_rtt",
+			"topic", m.cfg.TopicIndex,
+			"mesh", mesh,
+			"peer", shortPeer(p),
+			"peer_id", p.String(),
+			"smoothedRTT_ms", rttMs,
+		)
+	}
+}
+
+func (m *Manager) logMeshSummary(mesh string, peers []peer.ID) {
+	var total time.Duration
+	var samples int
+	for _, p := range peers {
+		rtt, ok := m.peerRTT(p)
+		if !ok {
+			continue
+		}
+		total += rtt
+		samples++
+	}
+	avgMs := int64(-1)
+	if samples > 0 {
+		avgMs = (total / time.Duration(samples)).Milliseconds()
+	}
+	msg := "attprop_" + mesh + "_mesh"
+	m.logger.Info(msg,
+		"topic", m.cfg.TopicIndex,
+		"size", len(peers),
+		"rtt_ms", avgMs,
+		"rtt_samples", samples,
+	)
+}
+
+func (m *Manager) peerRTT(p peer.ID) (time.Duration, bool) {
+	if m.host == nil {
+		return 0, false
+	}
+	for _, c := range m.host.Network().ConnsToPeer(p) {
+		var qc *quic.Conn
+		if ok := c.As(&qc); ok {
+			return qc.ConnectionStats().SmoothedRTT, true
+		}
+	}
+	return 0, false
 }
 
 // sendFullBitmapTo dumps our full current available bitmap (every active slot)

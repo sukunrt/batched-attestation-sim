@@ -213,7 +213,9 @@ mesh sizes are literal, including `0`; configure them if you want bitmap peers. 
 | `attprop_prune_backoff_seconds` | 60 | backoff after a prune before re-grafting |
 
 `analysis/prelim-analysis.py` labels this mode `att-propagation` and parses its native
-`attprop_*_received` wire-accounting logs for the received-byte split.
+`attprop_*_received` wire-accounting logs for the received-byte split. Each attprop heartbeat also
+logs `attprop_mesh_peer_rtt` for every push/bitmap mesh peer, followed by separate
+`attprop_bitmap_mesh` and `attprop_push_mesh` summary rows with `size` and average `rtt_ms`.
 
 ## Analysis
 
