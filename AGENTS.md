@@ -266,10 +266,13 @@ topic-local att_propagation manager (`cmd/attestation/node/attprop`).
 att_propagation reuses the partial-mode app-level receive keys — it logs `partial_received`,
 `partial_recv_batch`, `partial_recv_metadata`, `attestation_validated`, etc. via the same
 `SlogTracer.OnPartialReceive` path — and adds native wire-accounting keys from the stream reader:
-`attprop_data_received`, `attprop_metadata_received`, and `attprop_control_received`. Mode
-detection labels it `att-propagation` (the first/most-specific branch). `analysis/prelim-analysis.py`
-parses the attprop wire keys for exact att_data/signature/control byte split and can print a
-standalone attprop-only run when no classic baseline is present.
+`attprop_data_received`, `attprop_metadata_received`, and `attprop_control_received`. Outbound
+attprop logging includes `attprop_send_data` when a data frame is enqueued to a peer (`mesh`,
+`positions`, queue depth, in-flight counts, budget, and mesh sizes) and `attprop_send_bitmap` from
+the bitmap writer for each bitmap frame written. Mode detection labels it `att-propagation` (the
+first/most-specific branch). `analysis/prelim-analysis.py` parses the attprop wire keys for exact
+att_data/signature/control byte split and can print a standalone attprop-only run when no classic
+baseline is present.
 
 ### Partial-mode log keys
 

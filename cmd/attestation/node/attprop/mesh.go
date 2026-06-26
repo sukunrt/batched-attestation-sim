@@ -20,6 +20,19 @@ const (
 	roleBitmap
 )
 
+func (r meshRole) String() string {
+	switch r {
+	case rolePush:
+		return "push"
+	case roleBitmap:
+		return "bitmap"
+	case roleConnected:
+		return "connected"
+	default:
+		return "unknown"
+	}
+}
+
 // meshState is the per-topic graft/prune state machine (§C). It tracks each
 // peer's role plus a per-mesh prune backoff so a freshly pruned peer is not
 // immediately re-grafted (Full = both meshes, §C7). The eventloop owns this

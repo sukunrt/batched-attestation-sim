@@ -57,6 +57,8 @@ func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream) *bitmapWriter {
 				m.logger.Error("marshal bitmap", "topic", m.cfg.TopicIndex, "err", err)
 				continue
 			}
+			metaCount, availableOnes, attDataHashBytes := attpropMetadataStats(md)
+			attDataBytes := attpropMetadataDataBytes(md)
 			if err := writeFrame(bw.w, frame); err != nil {
 				m.logger.Debug(
 					"write bitmap frame",
@@ -67,9 +69,29 @@ func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream) *bitmapWriter {
 				m.post(peerDownEvent{peer: p})
 				return
 			}
+			m.logger.Info("attprop_send_bitmap",
+				"peer", shortPeer(p),
+				"topic", m.cfg.TopicIndex,
+				"bytes", len(frame),
+				"meta_count", metaCount,
+				"att_data_bytes", attDataBytes,
+				"att_data_hash_bytes", attDataHashBytes,
+				"available_ones", availableOnes,
+			)
 		}
 	}()
 	return bw
+}
+
+func attpropMetadataDataBytes(ctrl *pb.ControlEnvelope) int {
+	var n int
+	for _, md := range ctrl.Metadatas {
+		if md == nil {
+			continue
+		}
+		n += len(md.AttestationData)
+	}
+	return n
 }
 
 func (w *bitmapWriter) enqueueBitmaps(mds []*pb.CommitteeAttestationPartsMetadata) {

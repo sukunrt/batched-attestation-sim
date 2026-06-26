@@ -686,15 +686,42 @@ func (m *Manager) send(p peer.ID, ss *slotState, chunk map[string][]int) {
 		m.sentFull[p][string(hash)] = struct{}{}
 	}
 	m.activeData++
+	pushInFlight, bitmapInFlight := m.dataInFlightCounts()
+	pushMeshSize, bitmapMeshSize := m.mesh.counts()
+	role := m.mesh.role(p)
 	m.logger.Info("attprop_send_data",
 		"peer", shortPeer(p),
 		"topic", m.cfg.TopicIndex,
-		"role", int(m.mesh.role(p)),
+		"mesh", role.String(),
+		"role", int(role),
 		"slot", ss.slot,
 		"num_buckets", len(chunk),
 		"positions", total,
 		"bytes", len(frame),
+		"queue_len", len(s.work),
+		"queue_cap", cap(s.work),
+		"active_data", m.activeData,
+		"send_budget_b", m.cfg.SendBudgetB,
+		"push_in_flight", pushInFlight,
+		"bitmap_in_flight", bitmapInFlight,
+		"push_mesh_size", pushMeshSize,
+		"bitmap_mesh_size", bitmapMeshSize,
 	)
+}
+
+func (m *Manager) dataInFlightCounts() (push, bitmap int) {
+	for p, s := range m.senders {
+		if !s.inFlight {
+			continue
+		}
+		switch m.mesh.role(p) {
+		case rolePush:
+			push++
+		case roleBitmap:
+			bitmap++
+		}
+	}
+	return push, bitmap
 }
 
 // sendControl marshals graft/prune items and hands them to the peer's control
