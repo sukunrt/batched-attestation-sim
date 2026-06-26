@@ -220,8 +220,10 @@ mesh sizes are literal, including `0`; configure them if you want bitmap peers. 
 `attprop_*_received` wire-accounting logs for the received-byte split. Each attprop heartbeat also
 logs `attprop_mesh_peer_rtt` for every push/bitmap mesh peer, followed by separate
 `attprop_bitmap_mesh` and `attprop_push_mesh` summary rows with `size` and average `rtt_ms`.
-Attprop bandwidth logging keeps the node-wide `bandwidth` row and also emits
-`attprop_peer_bandwidth` per peer with `role=push|bitmap|conn`.
+Attprop bandwidth logging keeps the node-wide `bandwidth` row, including
+`push_pending_send_avg` across push peers, and also emits `attprop_peer_bandwidth` per peer with
+`role=push|bitmap|conn`; push peers also include `push_pending_send_size`, the count of validated
+local attestations not yet marked sent to that peer.
 Outbound attprop logging includes `attprop_send_data` when a data frame is enqueued to a peer
 (`mesh`, `positions`, queue depth, in-flight counts, budget, and mesh sizes) and
 `attprop_send_bitmap` from the bitmap writer for each bitmap frame written. Every successful

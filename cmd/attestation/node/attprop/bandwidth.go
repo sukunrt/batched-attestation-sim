@@ -46,6 +46,7 @@ func (m *Manager) onBandwidth(e bandwidthEvent) {
 		m.bandwidthPrevByPeer = make(map[peer.ID]bandwidthTotals)
 	}
 	byPeer := make(map[peer.ID]bandwidthTotals)
+	pushPending := make(map[peer.ID]int)
 	var qc *quic.Conn
 	for _, c := range m.host.Network().Conns() {
 		if ok := c.As(&qc); ok {
@@ -57,6 +58,12 @@ func (m *Manager) onBandwidth(e bandwidthEvent) {
 			byPeer[p] = t
 		}
 	}
+	for p := range m.senders {
+		if m.mesh.role(p) == rolePush {
+			pushPending[p] = m.pendingSendCountForPeer(p)
+		}
+	}
+	avgPushPending := averagePending(pushPending)
 
 	var sent, recv int
 	peers := make([]peer.ID, 0, len(byPeer))
@@ -65,6 +72,11 @@ func (m *Manager) onBandwidth(e bandwidthEvent) {
 		recv += t.recv
 		peers = append(peers, p)
 	}
+	for p := range pushPending {
+		if _, ok := byPeer[p]; !ok {
+			peers = append(peers, p)
+		}
+	}
 	ds, dr := sent-m.bandwidthPrevSent, recv-m.bandwidthPrevRecv
 	m.bandwidthPrevSent, m.bandwidthPrevRecv = sent, recv
 	sbps := int(float64(ds*8) / e.freq.Seconds())
@@ -72,7 +84,8 @@ func (m *Manager) onBandwidth(e bandwidthEvent) {
 	if sbps >= 10 || rbps >= 10 {
 		m.logger.Info("bandwidth",
 			"sentbps", sbps, "receivedbps", rbps,
-			"sentBytesTotal", sent, "receivedBytesTotal", recv)
+			"sentBytesTotal", sent, "receivedBytesTotal", recv,
+			"push_pending_send_avg", avgPushPending)
 	}
 
 	slices.Sort(peers)
@@ -82,7 +95,8 @@ func (m *Manager) onBandwidth(e bandwidthEvent) {
 		pds, pdr := t.sent-prev.sent, t.recv-prev.recv
 		psbps := int(float64(pds*8) / e.freq.Seconds())
 		prbps := int(float64(pdr*8) / e.freq.Seconds())
-		if psbps < 10 && prbps < 10 {
+		pending := pushPending[p]
+		if psbps < 10 && prbps < 10 && pending == 0 {
 			continue
 		}
 		role := attpropBandwidthRole(m.mesh.role(p))
@@ -90,10 +104,37 @@ func (m *Manager) onBandwidth(e bandwidthEvent) {
 			"peer", shortPeer(p),
 			"peer_id", p.String(),
 			"role", role,
+			"push_pending_send_size", pending,
 			"sentbps", psbps, "receivedbps", prbps,
 			"sentBytesTotal", t.sent, "receivedBytesTotal", t.recv)
 	}
 	m.bandwidthPrevByPeer = byPeer
+}
+
+func (m *Manager) pendingSendCountForPeer(p peer.ID) int {
+	var total int
+	for _, ss := range m.slots {
+		for _, b := range ss.buckets {
+			peerAvail := b.peerAvail[p]
+			for pos := range b.validated {
+				if peerAvail == nil || !peerAvail.Get(pos) {
+					total++
+				}
+			}
+		}
+	}
+	return total
+}
+
+func averagePending(counts map[peer.ID]int) float64 {
+	if len(counts) == 0 {
+		return 0
+	}
+	var total int
+	for _, count := range counts {
+		total += count
+	}
+	return float64(total) / float64(len(counts))
 }
 
 func attpropBandwidthRole(r meshRole) string {

@@ -280,6 +280,29 @@ func TestPushFullSentImmediately(t *testing.T) {
 	require.Equal(t, 1, push, "full push batch sent immediately")
 }
 
+func TestPendingSendCountForPeerCountsValidatedUnsent(t *testing.T) {
+	m := schedManager(t, 30, 4, 1000)
+	ss := m.seedValidated(1, 1, 2, 3)
+	b := ss.buckets[string(hash([]byte("data")))]
+	p := pid(0)
+
+	require.Equal(t, 3, m.pendingSendCountForPeer(p))
+
+	require.True(t, ss.markHolder(b, p, 2))
+	require.Equal(t, 2, m.pendingSendCountForPeer(p))
+
+	_, _ = ss.selectOneChunkForPeer(p, 30, true, noHolderCountLimit)
+	require.Equal(t, 0, m.pendingSendCountForPeer(p))
+}
+
+func TestAveragePending(t *testing.T) {
+	require.Equal(t, float64(0), averagePending(nil))
+	require.Equal(t, 2.5, averagePending(map[peer.ID]int{
+		pid(0): 2,
+		pid(1): 3,
+	}))
+}
+
 // TestSendDoneReselects: a peer cannot have two sends in flight; the next send
 // starts only after sendDone clears the first. (Models write-completion flow
 // control without a real socket.)
