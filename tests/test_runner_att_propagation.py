@@ -10,6 +10,7 @@ from simctl.topology import Edge, NodeSpec, Topology
 ATTPROP_FIELDS = (
     "att_propagation",
     "disable_bitmap_sends",
+    "enable_push_mesh_bitmap",
     "attprop_push_dlow",
     "attprop_push_d",
     "attprop_push_dhigh",
@@ -57,6 +58,7 @@ def test_att_propagation_emits_flag_and_n():
         topology=TopologyConfig(num_nodes=2),
         att_propagation=True,
         max_attestations_per_message=40,
+        enable_push_mesh_bitmap=True,
         attprop_push_dlow=6,
         attprop_push_d=8,
         attprop_push_dhigh=12,
@@ -67,6 +69,7 @@ def test_att_propagation_emits_flag_and_n():
     args = _args(cfg, "node0")
     assert "-att-propagation" in args
     assert "-max-attestations-per-message=40" in args
+    assert "-attprop-enable-push-mesh-bitmap" in args
     assert "-attprop-push-dlow=6" in args
     assert "-attprop-push-d=8" in args
     assert "-attprop-push-dhigh=12" in args
@@ -101,6 +104,7 @@ def test_tunables_survive_experiment_params_to_config():
     params = AttestationSimParams(
         att_propagation=True,
         disable_bitmap_sends=True,
+        enable_push_mesh_bitmap=True,
         attprop_send_budget_b=8,
         attprop_heartbeat_interval_ms=900,
     )

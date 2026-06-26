@@ -1,7 +1,9 @@
 package verify
 
 import (
+	"bytes"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -210,6 +212,42 @@ func TestVerifierPerAttestationDelayCounted(t *testing.T) {
 
 		assert.Equal(t, 2, delay.callCount())
 		assert.Equal(t, 5, sink.totalAttestations())
+	})
+}
+
+func TestVerifierLogsBatchSizeAndDuration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		v := New(
+			func() time.Duration { return 10 * time.Millisecond },
+			2*time.Millisecond,
+			5*time.Millisecond,
+			logger,
+		)
+		queuedAt := time.Now().Add(-7 * time.Millisecond)
+
+		v.verifyBatch([]queuedItem{
+			{item: Item{Topic: "t0", Slot: 1, Attestations: []any{1}}, enqueuedAt: queuedAt},
+			{item: Item{Topic: "t0", Slot: 1, Attestations: []any{2, 3}}, enqueuedAt: queuedAt.Add(3 * time.Millisecond)},
+		})
+
+		log := buf.String()
+		for _, want := range []string{
+			"msg=verification_batch",
+			"batch_items=2",
+			"attestations=3",
+			"queued_ms=7",
+			"base_delay_ms=10",
+			"per_attestation_delay_ms=2",
+			"sleep_ms=16",
+			"verification_duration_ms=16",
+			"duration_ms=23",
+		} {
+			if !strings.Contains(log, want) {
+				t.Fatalf("verification log missing %q in %q", want, log)
+			}
+		}
 	})
 }
 

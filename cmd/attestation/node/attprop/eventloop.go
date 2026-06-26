@@ -392,6 +392,7 @@ func (m *Manager) onTick() {
 	m.sendAllToPushMesh = true
 	m.trySelectAndSend()
 	m.sendAllToPushMesh = false
+	m.emitPushMeshBitmaps()
 }
 
 // onHeartbeat runs mesh maintenance: gather connected candidates, call the mesh
@@ -568,6 +569,15 @@ func (m *Manager) trySelectAndSend() {
 		}
 		m.send(p, ss, chunk)
 	}
+	pendingSends := make(map[peer.ID]int)
+	for p := range m.senders {
+		if m.mesh.role(p) == rolePush {
+			count := m.pendingSendCountForPeer(p)
+			if count > m.cfg.MaxAttsPerMessage {
+				pendingSends[p] = count
+			}
+		}
+	}
 	push, bitmapPeers := m.mesh.counts()
 	bitmapHolderLimit := (push + (bitmapPeers / 2) + 1)
 	for p, s := range m.senders {
@@ -580,6 +590,9 @@ func (m *Manager) trySelectAndSend() {
 		chunk, ss := m.selectForPeer(p, true, bitmapHolderLimit)
 		if chunk == nil {
 			continue
+		}
+		for p, count := range pendingSends {
+			m.logger.Error("invalid_bitmap_send_peer", "push_peer", p, "count", count)
 		}
 		m.send(p, ss, chunk)
 	}
@@ -805,6 +818,7 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 		}
 
 		newEntries := b.addReceived(positions, batch.Signatures)
+		newDataRecvBytes := dataBytesForNewEntries(batch, newEntries)
 
 		m.logger.Info("partial_recv_batch",
 			"from", shortPeer(from),
@@ -813,6 +827,7 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 			"att_digest", digestHex(data, hash),
 			"positions_count", len(positions),
 			"new_positions", len(newEntries),
+			"new_data_recv_bytes", newDataRecvBytes,
 			"batch_bytes", proto.Size(batch),
 		)
 
@@ -836,6 +851,24 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 			)
 		}
 	}
+}
+
+func dataBytesForNewEntries(batch *pb.BatchedAttestation, newEntries []any) int {
+	if batch == nil || len(newEntries) == 0 {
+		return 0
+	}
+	total := 0
+	if len(batch.AttestationData) > 0 {
+		total += len(batch.AttestationData)
+	}
+	for _, e := range newEntries {
+		pe, ok := e.(*attEntry)
+		if !ok || pe == nil {
+			continue
+		}
+		total += len(pe.Signature)
+	}
+	return total
 }
 
 // onValidated promotes verifier-validated positions to forwardable: move them

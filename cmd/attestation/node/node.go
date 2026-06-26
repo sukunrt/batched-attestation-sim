@@ -125,7 +125,7 @@ type Node struct {
 type AttPropParams struct {
 	PushDlow, PushD, PushDhigh                                         int
 	BitmapDlow, BitmapD, BitmapDhigh                                   int
-	DisableBitmapSends                                                 bool
+	DisableBitmapSends, EnablePushMeshBitmap                           bool
 	SendBudgetB, MaxAttsPerMessage, MaxPeersPerAtt                     int
 	TickInterval, BitmapFloorInterval, HeartbeatInterval, PruneBackoff time.Duration
 }
@@ -269,28 +269,29 @@ func (n *Node) startAttProp(ctx context.Context) {
 		)
 		go v.Run()
 		cfg := attprop.Config{
-			Logger:              slog.With("node", n.Num, "component", "attprop", "topic", topicIdx),
-			NodeNum:             n.Num,
-			Topic:               name,
-			TopicIndex:          topicIdx,
-			CommitteeSize:       n.CommitteeSize,
-			PublishStart:        n.PublishStart,
-			SlotDuration:        n.SlotDuration,
-			Fanout:              n.Fanout,
-			PushDlow:            p.PushDlow,
-			PushD:               p.PushD,
-			PushDhigh:           p.PushDhigh,
-			BitmapDlow:          p.BitmapDlow,
-			BitmapD:             p.BitmapD,
-			BitmapDhigh:         p.BitmapDhigh,
-			DisableBitmapSends:  p.DisableBitmapSends,
-			SendBudgetB:         p.SendBudgetB,
-			MaxAttsPerMessage:   p.MaxAttsPerMessage,
-			MaxPeersPerAtt:      p.MaxPeersPerAtt,
-			TickInterval:        p.TickInterval,
-			BitmapFloorInterval: p.BitmapFloorInterval,
-			HeartbeatInterval:   p.HeartbeatInterval,
-			PruneBackoff:        p.PruneBackoff,
+			Logger:               slog.With("node", n.Num, "component", "attprop", "topic", topicIdx),
+			NodeNum:              n.Num,
+			Topic:                name,
+			TopicIndex:           topicIdx,
+			CommitteeSize:        n.CommitteeSize,
+			PublishStart:         n.PublishStart,
+			SlotDuration:         n.SlotDuration,
+			Fanout:               n.Fanout,
+			PushDlow:             p.PushDlow,
+			PushD:                p.PushD,
+			PushDhigh:            p.PushDhigh,
+			BitmapDlow:           p.BitmapDlow,
+			BitmapD:              p.BitmapD,
+			BitmapDhigh:          p.BitmapDhigh,
+			DisableBitmapSends:   p.DisableBitmapSends,
+			EnablePushMeshBitmap: p.EnablePushMeshBitmap,
+			SendBudgetB:          p.SendBudgetB,
+			MaxAttsPerMessage:    p.MaxAttsPerMessage,
+			MaxPeersPerAtt:       p.MaxPeersPerAtt,
+			TickInterval:         p.TickInterval,
+			BitmapFloorInterval:  p.BitmapFloorInterval,
+			HeartbeatInterval:    p.HeartbeatInterval,
+			PruneBackoff:         p.PruneBackoff,
 		}
 		m := attprop.New(n.Host, v, n.attPropTracer(), cfg)
 		m.Start(ctx)

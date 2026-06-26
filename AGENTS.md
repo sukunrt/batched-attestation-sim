@@ -238,6 +238,7 @@ attprop_tick_interval_ms: 0
 attprop_bitmap_floor_interval_ms: 0
 attprop_heartbeat_interval_ms: 0
 attprop_prune_backoff_seconds: 0
+enable_push_mesh_bitmap: false
 ```
 
 It is mutually exclusive with `use_partial_messages` and `partial_priority` (the Go side fatals on
@@ -254,6 +255,9 @@ Buckets are keyed by `sha256(attestation_data)`. Push and bitmap streams each se
 manager caches `sha256(attestation_data) => attestation_data` for validation and tracing. Bitmap
 streams queue the latest full available state internally, but each per-peer writer emits only
 `available_ids` deltas and leaves legacy bitmap fields empty.
+When `enable_push_mesh_bitmap: true`, every attprop push tick also queues the node's current
+available bitmap to push-mesh peers on their bitmap streams. This is separate from the bitmap floor
+tick for bitmap-mesh peers and does not consume that floor-tick emission state.
 
 Mode bool plumbing mirrors `partial_priority`: simctl writes the `att_propagation` key (plus the
 `attprop_*` tunables and `max_attestations_per_message`) into `config.yaml` from the Pydantic model,
@@ -289,6 +293,9 @@ Structured slog lines emitted by partial mode (use `att_digest` — the hex-enco
 - `partial_recv_metadata` — per-bucket metadata received.
 - `partial_recv_batch` — per-bucket data batch received.
 - `attestation_validated` — verifier callback promoted a position to validated.
+- `verification_batch` — shared batch verifier completed a batch; includes `batch_items`,
+  `attestations`, `queued_ms`, `base_delay_ms`, `per_attestation_delay_ms`, `sleep_ms`,
+  `verification_duration_ms`, and `duration_ms` (oldest queued item through validation completion).
 - `rpc_sent` / `rpc_received` / `topic_ihave_*` / `topic_message_*` / `partial_sent` / `partial_received` — wire-level lines from `rpc_tracer.go`, attestation-aware (`att_count`, `att_data_bytes`, `sig_bytes`; partial adds `data_batches` / `meta_count` / `available_ones` / `requests_ones`); consumed by `analysis/prelim-analysis.py` to compare classic vs partial.
 
 

@@ -13,8 +13,9 @@ import (
 // bitmap_stream.go implements the bitmap advertisement stream (§D): full
 // available state per active bucket is queued internally, triggered by the
 // periodic floor tick (re-emit only if changed), then each bitmap writer emits
-// per-peer available_ids deltas to bitmap-mesh peers only and bypasses the send
-// budget.
+// per-peer available_ids deltas to bitmap-mesh peers and bypasses the send
+// budget. When EnablePushMeshBitmap is set, push-mesh peers also receive
+// per-peer deltas on every push tick.
 
 // buildAvailableEnvelope assembles an internal full-availability
 // pb.ControlEnvelope (one CommitteeAttestationPartsMetadata per bucket,
@@ -97,6 +98,43 @@ func (m *Manager) emitBitmaps() {
 			count++
 		}
 		m.logger.Debug("attprop_emit_bitmap",
+			"topic", m.cfg.TopicIndex,
+			"slot", slot, "buckets", len(ctrl.Metadatas),
+			"peers", count)
+	}
+}
+
+// emitPushMeshBitmaps queues current availability to push-mesh peers on the
+// push tick. Unlike the bitmap-floor path, this does not mutate lastEmitted:
+// floor cadence for bitmap peers remains independent, while each push peer's
+// bitmapWriter still delta-compresses against that peer's sent state.
+func (m *Manager) emitPushMeshBitmaps() {
+	if m.cfg.DisableBitmapSends || !m.cfg.EnablePushMeshBitmap {
+		return
+	}
+	peerCount := 0
+	for p := range m.bitmapWriters {
+		if m.mesh.role(p) == rolePush {
+			peerCount++
+		}
+	}
+	if peerCount == 0 {
+		return
+	}
+	for slot := range m.slots {
+		ctrl := m.buildAvailableEnvelope(slot)
+		if ctrl == nil {
+			continue
+		}
+		count := 0
+		for p, w := range m.bitmapWriters {
+			if m.mesh.role(p) != rolePush {
+				continue
+			}
+			w.enqueueBitmaps(ctrl.Metadatas)
+			count++
+		}
+		m.logger.Debug("attprop_emit_push_mesh_bitmap",
 			"topic", m.cfg.TopicIndex,
 			"slot", slot, "buckets", len(ctrl.Metadatas),
 			"peers", count)

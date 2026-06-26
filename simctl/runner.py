@@ -218,6 +218,8 @@ def generate_shadow_yaml(
             args_parts.append(
                 f"-max-attestations-per-message={config.max_attestations_per_message}"
             )
+            if config.enable_push_mesh_bitmap:
+                args_parts.append("-attprop-enable-push-mesh-bitmap")
             for flag, value in (
                 ("attprop-push-dlow", config.attprop_push_dlow),
                 ("attprop-push-d", config.attprop_push_d),

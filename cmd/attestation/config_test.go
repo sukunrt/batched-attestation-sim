@@ -69,6 +69,10 @@ func TestAttPropConfigDefaults(t *testing.T) {
 	if !cfg.AttPropConfig().DisableBitmapSends {
 		t.Fatalf("AttPropConfig() did not preserve DisableBitmapSends")
 	}
+	cfg.EnablePushMeshBitmap = true
+	if !cfg.AttPropConfig().EnablePushMeshBitmap {
+		t.Fatalf("AttPropConfig() did not preserve EnablePushMeshBitmap")
+	}
 }
 
 func TestPublishDelayFunc_Zero(t *testing.T) {

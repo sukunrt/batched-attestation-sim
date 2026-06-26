@@ -86,13 +86,38 @@ func (m *Manager) seedValidated(slot int, positions ...int) *slotState {
 	return ss
 }
 
+func TestDataBytesForNewEntries(t *testing.T) {
+	batch := &pb.BatchedAttestation{
+		AttestationData: []byte{1, 2, 3, 4},
+		Signatures:      [][]byte{{1, 2}, {3, 4, 5}, {6}},
+	}
+	entries := []any{
+		&attEntry{Position: 0, Signature: batch.Signatures[0]},
+		&attEntry{Position: 2, Signature: batch.Signatures[2]},
+	}
+
+	require.Equal(t, 7, dataBytesForNewEntries(batch, entries))
+
+	hashOnly := &pb.BatchedAttestation{
+		AttestationDataHash: []byte{9, 8, 7},
+		Signatures:          batch.Signatures,
+	}
+	require.Equal(t, 3, dataBytesForNewEntries(hashOnly, entries))
+	require.Equal(t, 0, dataBytesForNewEntries(batch, nil))
+}
+
 func TestDisableBitmapSendsSuppressesOutboundAdvertisements(t *testing.T) {
 	m := schedManager(t, 30, 4, 30)
 	m.cfg.DisableBitmapSends = true
+	m.cfg.EnablePushMeshBitmap = true
 	p := peer.ID("bitmap-peer")
 	w := testBitmapWriter()
 	m.bitmapWriters[p] = w
 	m.mesh.roles[p] = roleBitmap
+	pushPeer := peer.ID("push-peer")
+	pushW := testBitmapWriter()
+	m.bitmapWriters[pushPeer] = pushW
+	m.mesh.roles[pushPeer] = rolePush
 	ss := m.seedValidated(1, 3)
 	b := ss.buckets[string(hash([]byte("data")))]
 
@@ -100,8 +125,37 @@ func TestDisableBitmapSendsSuppressesOutboundAdvertisements(t *testing.T) {
 	require.Empty(t, w.work)
 	require.Nil(t, b.lastEmitted, "disabled floor emit must not mark bucket emitted")
 
+	m.emitPushMeshBitmaps()
+	require.Empty(t, pushW.work)
+
 	m.sendFullBitmapTo(p)
 	require.Empty(t, w.work)
+}
+
+func TestPushMeshBitmapEmittedOnPushTick(t *testing.T) {
+	m := schedManager(t, 30, 4, 30)
+	m.cfg.EnablePushMeshBitmap = true
+	pushPeer := peer.ID("push-peer")
+	pushW := testBitmapWriter()
+	m.bitmapWriters[pushPeer] = pushW
+	m.mesh.roles[pushPeer] = rolePush
+	bitmapPeer := peer.ID("bitmap-peer")
+	bitmapW := testBitmapWriter()
+	m.bitmapWriters[bitmapPeer] = bitmapW
+	m.mesh.roles[bitmapPeer] = roleBitmap
+	ss := m.seedValidated(1, 3)
+	b := ss.buckets[string(hash([]byte("data")))]
+
+	m.onTick()
+
+	require.Len(t, pushW.work, 1)
+	<-pushW.work
+	env := pushW.getNextBitmap()
+	require.NotNil(t, env)
+	require.Len(t, env.Metadatas, 1)
+	require.Equal(t, []uint32{3}, env.Metadatas[0].AvailableIds)
+	require.Empty(t, bitmapW.work, "push-tick bitmaps must target push mesh only")
+	require.Nil(t, b.lastEmitted, "push-tick bitmaps must not consume bitmap-floor emission state")
 }
 
 // TestBudgetGatePushExemptBitmapCapped: with many push and many bitmap peers all

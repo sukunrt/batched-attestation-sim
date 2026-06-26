@@ -26,6 +26,7 @@ type Item struct {
 // queuedItem pairs a submitted item with its per-submit callback.
 type queuedItem struct {
 	item       Item
+	enqueuedAt time.Time
 	onVerified func(Item)
 }
 
@@ -72,7 +73,7 @@ func (v *Verifier) Submit(item Item, onVerified func(Item)) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	v.queue = append(v.queue, queuedItem{item: item, onVerified: onVerified})
+	v.queue = append(v.queue, queuedItem{item: item, enqueuedAt: time.Now(), onVerified: onVerified})
 	// Non-blocking signal: if notify already has a value, skip.
 	select {
 	case v.notify <- struct{}{}:
@@ -147,10 +148,33 @@ func (v *Verifier) verifyBatch(batch []queuedItem) {
 		return
 	}
 	var totalAttestations int
+	validationStart := time.Now()
+	oldestQueuedAt := validationStart
 	for _, qi := range batch {
 		totalAttestations += len(qi.item.Attestations)
+		if !qi.enqueuedAt.IsZero() && qi.enqueuedAt.Before(oldestQueuedAt) {
+			oldestQueuedAt = qi.enqueuedAt
+		}
 	}
-	time.Sleep(v.verificationDelay() + time.Duration(totalAttestations)*v.perAttestationDelay)
+	baseDelay := v.verificationDelay()
+	sleepFor := baseDelay + time.Duration(totalAttestations)*v.perAttestationDelay
+	time.Sleep(sleepFor)
+	completedAt := time.Now()
+	queuedFor := validationStart.Sub(oldestQueuedAt)
+	verificationDuration := completedAt.Sub(validationStart)
+	totalDuration := completedAt.Sub(oldestQueuedAt)
+	if v.logger != nil {
+		v.logger.Info("verification_batch",
+			"batch_items", len(batch),
+			"attestations", totalAttestations,
+			"queued_ms", queuedFor.Milliseconds(),
+			"base_delay_ms", baseDelay.Milliseconds(),
+			"per_attestation_delay_ms", v.perAttestationDelay.Milliseconds(),
+			"sleep_ms", sleepFor.Milliseconds(),
+			"verification_duration_ms", verificationDuration.Milliseconds(),
+			"duration_ms", totalDuration.Milliseconds(),
+		)
+	}
 
 	for _, qi := range batch {
 		if qi.onVerified != nil {

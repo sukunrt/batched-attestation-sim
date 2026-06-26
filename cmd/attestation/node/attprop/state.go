@@ -250,10 +250,10 @@ OUTER:
 				if peerAvail.Get(pos) {
 					continue
 				}
+				drawn = append(drawn, candidate{bucketKey, pos})
 				if len(drawn) == maxN {
 					break OUTER
 				}
-				drawn = append(drawn, candidate{bucketKey, pos})
 			}
 		}
 	}

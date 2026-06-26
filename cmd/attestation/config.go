@@ -59,6 +59,10 @@ type SimConfig struct {
 	// bitmap advertisements. Bitmap-mesh peers still receive spare-capacity data.
 	DisableBitmapSends bool `yaml:"disable_bitmap_sends"`
 
+	// EnablePushMeshBitmap sends available-bitmap advertisements to push-mesh
+	// peers on every attprop push tick, using the bitmap stream.
+	EnablePushMeshBitmap bool `yaml:"enable_push_mesh_bitmap"`
+
 	// §C1 push-mesh sizes (default 4/5/5: Dlow=top-up trigger, D=Dhigh=hard cap).
 	AttPropPushDlow  int `yaml:"attprop_push_dlow"`
 	AttPropPushD     int `yaml:"attprop_push_d"`
@@ -123,20 +127,21 @@ func (s *SimConfig) AttPropConfig() node.AttPropParams {
 		return time.Duration(pick(v, defMs)) * time.Millisecond
 	}
 	return node.AttPropParams{
-		PushDlow:            pick(s.AttPropPushDlow, 4),
-		PushD:               pick(s.AttPropPushD, 5),
-		PushDhigh:           pick(s.AttPropPushDhigh, 5),
-		BitmapDlow:          s.AttPropBitmapDlow,
-		BitmapD:             s.AttPropBitmapD,
-		BitmapDhigh:         s.AttPropBitmapDhigh,
-		DisableBitmapSends:  s.DisableBitmapSends,
-		SendBudgetB:         pick(s.AttPropSendBudgetB, 4),
-		MaxAttsPerMessage:   s.EffectiveMaxAttestationsPerMessage(),
-		MaxPeersPerAtt:      pick(s.AttPropMaxPeersPerAtt, 30),
-		TickInterval:        ms(s.AttPropTickIntervalMs, 20),
-		BitmapFloorInterval: ms(s.AttPropBitmapFloorIntervalMs, 50),
-		HeartbeatInterval:   ms(s.AttPropHeartbeatIntervalMs, 700),
-		PruneBackoff:        time.Duration(pick(s.AttPropPruneBackoffSeconds, 60)) * time.Second,
+		PushDlow:             pick(s.AttPropPushDlow, 4),
+		PushD:                pick(s.AttPropPushD, 5),
+		PushDhigh:            pick(s.AttPropPushDhigh, 5),
+		BitmapDlow:           s.AttPropBitmapDlow,
+		BitmapD:              s.AttPropBitmapD,
+		BitmapDhigh:          s.AttPropBitmapDhigh,
+		DisableBitmapSends:   s.DisableBitmapSends,
+		EnablePushMeshBitmap: s.EnablePushMeshBitmap,
+		SendBudgetB:          pick(s.AttPropSendBudgetB, 4),
+		MaxAttsPerMessage:    s.EffectiveMaxAttestationsPerMessage(),
+		MaxPeersPerAtt:       pick(s.AttPropMaxPeersPerAtt, 30),
+		TickInterval:         ms(s.AttPropTickIntervalMs, 20),
+		BitmapFloorInterval:  ms(s.AttPropBitmapFloorIntervalMs, 50),
+		HeartbeatInterval:    ms(s.AttPropHeartbeatIntervalMs, 700),
+		PruneBackoff:         time.Duration(pick(s.AttPropPruneBackoffSeconds, 60)) * time.Second,
 	}
 }
 

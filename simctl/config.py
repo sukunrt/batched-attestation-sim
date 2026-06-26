@@ -141,6 +141,7 @@ class AttestationSimConfig(BaseModel):
     # other zero-valued tunables use the Go-side spec default.
     att_propagation: bool = False
     disable_bitmap_sends: bool = False
+    enable_push_mesh_bitmap: bool = False
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0
     attprop_push_dhigh: int = 0
@@ -225,6 +226,7 @@ class AttestationSimParams(BaseModel):
     # other zero-valued tunables use the Go-side spec default.
     att_propagation: bool = False
     disable_bitmap_sends: bool = False
+    enable_push_mesh_bitmap: bool = False
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0
     attprop_push_dhigh: int = 0

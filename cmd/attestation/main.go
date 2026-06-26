@@ -51,6 +51,7 @@ func main() {
 		attPropBitmapDlow    = flag.Int("attprop-bitmap-dlow", 0, "att_propagation bitmap Dlow (0 allowed)")
 		attPropBitmapD       = flag.Int("attprop-bitmap-d", 0, "att_propagation bitmap D (0 allowed)")
 		attPropBitmapDhigh   = flag.Int("attprop-bitmap-dhigh", 0, "att_propagation bitmap Dhigh (0 allowed)")
+		attPropPushBitmap    = flag.Bool("attprop-enable-push-mesh-bitmap", false, "Send att_propagation bitmaps to push-mesh peers on every push tick")
 		gossipsubParams      = flag.String("gossipsub-params", "", "Per-node gossipsub mesh override, e.g. Dlow:8,D:12,Dhigh:16; empty uses the config value")
 	)
 	flag.Parse()
@@ -92,6 +93,9 @@ func main() {
 	}
 	if flagsSet["attprop-bitmap-dhigh"] {
 		sim.AttPropBitmapDhigh = *attPropBitmapDhigh
+	}
+	if *attPropPushBitmap {
+		sim.EnablePushMeshBitmap = true
 	}
 
 	publishSlots := make(map[int]struct{})

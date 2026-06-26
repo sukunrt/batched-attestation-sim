@@ -83,6 +83,7 @@ type Config struct {
 	PushDlow, PushD, PushDhigh       int
 	BitmapDlow, BitmapD, BitmapDhigh int
 	DisableBitmapSends               bool
+	EnablePushMeshBitmap             bool
 
 	// §F1 per-topic SendBudgetB (default 4), §F3 MaxAttsPerMessage N (default 30),
 	// and MaxPeersPerAtt as the initial holder-count index capacity.

@@ -200,6 +200,8 @@ Enable it with:
 att_propagation: true
 # Optional: form the bitmap mesh, but suppress outbound bitmap advertisements.
 disable_bitmap_sends: false
+# Optional: also send available-bitmaps to push-mesh peers every push tick.
+enable_push_mesh_bitmap: false
 ```
 
 It is mutually exclusive with `use_partial_messages` and `partial_priority`; setting more than one
@@ -210,6 +212,7 @@ mesh sizes are literal, including `0`; configure them if you want bitmap peers. 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `disable_bitmap_sends` | false | form bitmap mesh peers but do not send bitmap advertisements |
+| `enable_push_mesh_bitmap` | false | send available-bitmaps to push-mesh peers on each push tick, using the bitmap stream |
 | `attprop_push_dlow` / `attprop_push_d` / `attprop_push_dhigh` | 4 / 5 / 5 | push-mesh sizes (low = top-up trigger, D = high = hard cap) |
 | `attprop_bitmap_dlow` / `attprop_bitmap_d` / `attprop_bitmap_dhigh` | 0 / 0 / 0 | bitmap-mesh sizes |
 | `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |
@@ -232,6 +235,9 @@ Outbound attprop logging includes `attprop_send_data` when a data frame is enque
 `attprop_send_bitmap` from the bitmap writer for each bitmap frame written. Every successful
 attprop writer call also emits `attprop_write_frame` with `writer_type`, `bytes`, and
 `duration_ms`.
+All modes using the shared batch verifier emit `verification_batch` with `batch_items`,
+`attestations`, `queued_ms`, `base_delay_ms`, `per_attestation_delay_ms`, `sleep_ms`,
+`verification_duration_ms`, and `duration_ms` (oldest queued item through validation completion).
 
 ## Analysis
 
