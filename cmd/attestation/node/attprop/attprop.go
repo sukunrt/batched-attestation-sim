@@ -82,6 +82,7 @@ type Config struct {
 	// 14/16/16 (D == Dhigh: hard cap, Dlow is the top-up trigger).
 	PushDlow, PushD, PushDhigh       int
 	BitmapDlow, BitmapD, BitmapDhigh int
+	DisableBitmapSends               bool
 
 	// §F1 per-topic SendBudgetB (default 4), §F3 MaxAttsPerMessage N (default 30),
 	// and MaxPeersPerAtt as the initial holder-count index capacity.

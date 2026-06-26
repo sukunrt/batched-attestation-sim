@@ -86,6 +86,24 @@ func (m *Manager) seedValidated(slot int, positions ...int) *slotState {
 	return ss
 }
 
+func TestDisableBitmapSendsSuppressesOutboundAdvertisements(t *testing.T) {
+	m := schedManager(t, 30, 4, 30)
+	m.cfg.DisableBitmapSends = true
+	p := peer.ID("bitmap-peer")
+	w := testBitmapWriter()
+	m.bitmapWriters[p] = w
+	m.mesh.roles[p] = roleBitmap
+	ss := m.seedValidated(1, 3)
+	b := ss.buckets[string(hash([]byte("data")))]
+
+	m.emitBitmaps()
+	require.Empty(t, w.work)
+	require.Nil(t, b.lastEmitted, "disabled floor emit must not mark bucket emitted")
+
+	m.sendFullBitmapTo(p)
+	require.Empty(t, w.work)
+}
+
 // TestBudgetGatePushExemptBitmapCapped: with many push and many bitmap peers all
 // idle and a large pool of scarce data, one selection pass starts a send to
 // EVERY push peer (exempt from B) but no more than B bitmap peers (gated). This

@@ -64,6 +64,11 @@ func TestAttPropConfigDefaults(t *testing.T) {
 		o.MaxAttsPerMessage != 12 {
 		t.Fatalf("AttPropConfig() overrides not applied: %+v", o)
 	}
+
+	cfg.DisableBitmapSends = true
+	if !cfg.AttPropConfig().DisableBitmapSends {
+		t.Fatalf("AttPropConfig() did not preserve DisableBitmapSends")
+	}
 }
 
 func TestPublishDelayFunc_Zero(t *testing.T) {

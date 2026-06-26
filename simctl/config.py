@@ -140,6 +140,7 @@ class AttestationSimConfig(BaseModel):
     # max_attestations_per_message. Bitmap D values are literal, including 0;
     # other zero-valued tunables use the Go-side spec default.
     att_propagation: bool = False
+    disable_bitmap_sends: bool = False
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0
     attprop_push_dhigh: int = 0
@@ -223,6 +224,7 @@ class AttestationSimParams(BaseModel):
     # max_attestations_per_message. Bitmap D values are literal, including 0;
     # other zero-valued tunables use the Go-side spec default.
     att_propagation: bool = False
+    disable_bitmap_sends: bool = False
     attprop_push_dlow: int = 0
     attprop_push_d: int = 0
     attprop_push_dhigh: int = 0

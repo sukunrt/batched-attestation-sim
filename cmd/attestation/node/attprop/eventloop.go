@@ -504,6 +504,9 @@ func (m *Manager) peerRTT(p peer.ID) (time.Duration, bool) {
 // peer's missing available_ids. Used when a peer first enters our bitmap mesh
 // (§D1).
 func (m *Manager) sendFullBitmapTo(p peer.ID) {
+	if m.cfg.DisableBitmapSends {
+		return
+	}
 	w, ok := m.bitmapWriters[p]
 	if !ok {
 		return

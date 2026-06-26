@@ -55,6 +55,10 @@ type SimConfig struct {
 	// literal; the other zero-valued tunables fall back to spec defaults.
 	AttPropagation bool `yaml:"att_propagation"`
 
+	// DisableBitmapSends keeps the bitmap mesh formed but suppresses outbound
+	// bitmap advertisements. Bitmap-mesh peers still receive spare-capacity data.
+	DisableBitmapSends bool `yaml:"disable_bitmap_sends"`
+
 	// §C1 push-mesh sizes (default 4/5/5: Dlow=top-up trigger, D=Dhigh=hard cap).
 	AttPropPushDlow  int `yaml:"attprop_push_dlow"`
 	AttPropPushD     int `yaml:"attprop_push_d"`
@@ -125,6 +129,7 @@ func (s *SimConfig) AttPropConfig() node.AttPropParams {
 		BitmapDlow:          s.AttPropBitmapDlow,
 		BitmapD:             s.AttPropBitmapD,
 		BitmapDhigh:         s.AttPropBitmapDhigh,
+		DisableBitmapSends:  s.DisableBitmapSends,
 		SendBudgetB:         pick(s.AttPropSendBudgetB, 4),
 		MaxAttsPerMessage:   s.EffectiveMaxAttestationsPerMessage(),
 		MaxPeersPerAtt:      pick(s.AttPropMaxPeersPerAtt, 30),

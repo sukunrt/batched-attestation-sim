@@ -9,6 +9,7 @@ from simctl.topology import Edge, NodeSpec, Topology
 
 ATTPROP_FIELDS = (
     "att_propagation",
+    "disable_bitmap_sends",
     "attprop_push_dlow",
     "attprop_push_d",
     "attprop_push_dhigh",
@@ -99,6 +100,7 @@ def test_no_att_propagation_flag_when_off():
 def test_tunables_survive_experiment_params_to_config():
     params = AttestationSimParams(
         att_propagation=True,
+        disable_bitmap_sends=True,
         attprop_send_budget_b=8,
         attprop_heartbeat_interval_ms=900,
     )

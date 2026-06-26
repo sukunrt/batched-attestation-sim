@@ -87,6 +87,7 @@ def _sim_params_to_config(
             max_attestations_per_message=params.max_attestations_per_message,
             send_available_with_data=params.send_available_with_data,
             att_propagation=params.att_propagation,
+            disable_bitmap_sends=params.disable_bitmap_sends,
             attprop_push_dlow=params.attprop_push_dlow,
             attprop_push_d=params.attprop_push_d,
             attprop_push_dhigh=params.attprop_push_dhigh,

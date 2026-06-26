@@ -198,6 +198,8 @@ Enable it with:
 
 ```yaml
 att_propagation: true
+# Optional: form the bitmap mesh, but suppress outbound bitmap advertisements.
+disable_bitmap_sends: false
 ```
 
 It is mutually exclusive with `use_partial_messages` and `partial_priority`; setting more than one
@@ -207,6 +209,7 @@ mesh sizes are literal, including `0`; configure them if you want bitmap peers. 
 
 | Key | Default | Meaning |
 | --- | --- | --- |
+| `disable_bitmap_sends` | false | form bitmap mesh peers but do not send bitmap advertisements |
 | `attprop_push_dlow` / `attprop_push_d` / `attprop_push_dhigh` | 4 / 5 / 5 | push-mesh sizes (low = top-up trigger, D = high = hard cap) |
 | `attprop_bitmap_dlow` / `attprop_bitmap_d` / `attprop_bitmap_dhigh` | 0 / 0 / 0 | bitmap-mesh sizes |
 | `attprop_send_budget_b` | 4 | per-topic per-tick send budget B |

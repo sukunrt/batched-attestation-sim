@@ -71,6 +71,9 @@ func bucketKeys(ss *slotState) []string {
 // for the slots that changed since the last emit, bypassing the send budget
 // (§D3). Eventloop-only.
 func (m *Manager) emitBitmaps() {
+	if m.cfg.DisableBitmapSends {
+		return
+	}
 	peerCount := 0
 	for p := range m.bitmapWriters {
 		if m.mesh.role(p) == roleBitmap {

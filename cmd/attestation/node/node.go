@@ -125,6 +125,7 @@ type Node struct {
 type AttPropParams struct {
 	PushDlow, PushD, PushDhigh                                         int
 	BitmapDlow, BitmapD, BitmapDhigh                                   int
+	DisableBitmapSends                                                 bool
 	SendBudgetB, MaxAttsPerMessage, MaxPeersPerAtt                     int
 	TickInterval, BitmapFloorInterval, HeartbeatInterval, PruneBackoff time.Duration
 }
@@ -282,6 +283,7 @@ func (n *Node) startAttProp(ctx context.Context) {
 			BitmapDlow:          p.BitmapDlow,
 			BitmapD:             p.BitmapD,
 			BitmapDhigh:         p.BitmapDhigh,
+			DisableBitmapSends:  p.DisableBitmapSends,
 			SendBudgetB:         p.SendBudgetB,
 			MaxAttsPerMessage:   p.MaxAttsPerMessage,
 			MaxPeersPerAtt:      p.MaxPeersPerAtt,
