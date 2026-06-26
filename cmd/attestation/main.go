@@ -160,8 +160,10 @@ func main() {
 	time.Sleep(time.Duration(rand.IntN(1000)) * time.Millisecond)
 	n.Start(context.Background())
 
-	// Start bandwidth reporting as early as possible (right after host is created)
-	if freq := n.BandwidthLogFrequency; freq > 0 {
+	// Start gossipsub/partial bandwidth reporting as early as possible (right
+	// after host is created). Attprop bypasses gossipsub, so its package owns
+	// the equivalent reporter.
+	if freq := n.BandwidthLogFrequency; freq > 0 && !useAttProp {
 		go n.ReportBandwidth(context.Background(), freq)
 	}
 

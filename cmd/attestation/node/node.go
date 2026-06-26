@@ -296,6 +296,9 @@ func (n *Node) startAttProp(ctx context.Context) {
 		// short-lived one scoped to Run(): it must outlive Run so post-run reads
 		// in tests still reach the eventloop. Cancelling ctx tears it down.
 		go m.Run(ctx)
+		if topicIdx == 0 && n.BandwidthLogFrequency > 0 {
+			go m.ReportBandwidth(ctx, n.BandwidthLogFrequency)
+		}
 		context.AfterFunc(ctx, v.Stop)
 		n.attProp[name] = m
 	}
@@ -685,6 +688,9 @@ func (n *Node) selfPublishAttProp(slot int) {
 // connections. Intended to be run in its own goroutine; returns when ctx is
 // canceled.
 func (n *Node) ReportBandwidth(ctx context.Context, freq time.Duration) {
+	if n.AttPropagation {
+		return
+	}
 	ticker := time.NewTicker(freq)
 	defer ticker.Stop()
 	var prevSent, prevRecv int

@@ -305,6 +305,9 @@ func (m *Manager) dispatch(ev event) {
 		m.emitBitmaps()
 	case heartbeatEvent:
 		m.onHeartbeat()
+	case bandwidthEvent:
+		m.onBandwidth(e)
+		return
 	}
 	m.trySelectAndSend()
 }

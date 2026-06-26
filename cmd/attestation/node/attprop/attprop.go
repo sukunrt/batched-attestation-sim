@@ -156,6 +156,11 @@ type Manager struct {
 	// are exempt (§F1) but still tracked here for observability.
 	activeData int
 
+	// bandwidthPrev* are eventloop-owned cumulative QUIC byte totals used to log
+	// per-interval node-wide bandwidth.
+	bandwidthPrevSent, bandwidthPrevRecv int
+	bandwidthPrevByPeer                  map[peer.ID]bandwidthTotals
+
 	// sendAllToPushMesh is eventloop-local tick state (§F4): true only during a
 	// tickEvent's selection pass so partial push batches flush on the tick; false
 	// otherwise. Never observed across a channel hop.
@@ -179,23 +184,24 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 		cfg.MaxMsgSize = defaultMaxMsgSize
 	}
 	return &Manager{
-		host:           h,
-		verifier:       v,
-		tracer:         tr,
-		cfg:            cfg,
-		logger:         logger,
-		self:           h.ID(),
-		events:         make(chan event, 256),
-		lifecycle:      make(chan slotLifecycleCmd),
-		senders:        make(map[peer.ID]*peerSender),
-		bitmapWriters:  make(map[peer.ID]*bitmapWriter),
-		controlWriters: make(map[peer.ID]*peerSender),
-		mesh:           newMeshState(cfg),
-		slots:          make(map[int]*slotState),
-		identities:     newAttestationIdentityCache(),
-		sentFull:       make(map[peer.ID]map[string]struct{}),
-		opening:        make(map[peer.ID]struct{}),
-		pending:        make(map[peer.ID]*peerStreams),
+		host:                h,
+		verifier:            v,
+		tracer:              tr,
+		cfg:                 cfg,
+		logger:              logger,
+		self:                h.ID(),
+		events:              make(chan event, 256),
+		lifecycle:           make(chan slotLifecycleCmd),
+		senders:             make(map[peer.ID]*peerSender),
+		bitmapWriters:       make(map[peer.ID]*bitmapWriter),
+		controlWriters:      make(map[peer.ID]*peerSender),
+		mesh:                newMeshState(cfg),
+		slots:               make(map[int]*slotState),
+		identities:          newAttestationIdentityCache(),
+		sentFull:            make(map[peer.ID]map[string]struct{}),
+		bandwidthPrevByPeer: make(map[peer.ID]bandwidthTotals),
+		opening:             make(map[peer.ID]struct{}),
+		pending:             make(map[peer.ID]*peerStreams),
 	}
 }
 
@@ -235,11 +241,11 @@ func (m *Manager) ConnectPeer(p peer.ID) {
 }
 
 // Run launches the eventloop and the tick/floor/heartbeat timer drivers, then
-// blocks until ctx is cancelled (§F4). A fanout node has no eventloop — it only
-// installs the reset handlers (it never receives) and returns once ctx is done.
+// blocks until ctx is cancelled (§F4). A fanout node skips mesh timers but still
+// runs the eventloop so manager-owned diagnostics can be posted through events.
 func (m *Manager) Run(ctx context.Context) {
 	if m.cfg.Fanout {
-		<-ctx.Done()
+		m.run(ctx)
 		return
 	}
 	go m.driveTimer(ctx, m.cfg.TickInterval, func() event { return tickEvent{} })
