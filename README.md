@@ -136,7 +136,9 @@ is built: the topic's `fanout_nodes_per_topic` fanout nodes plus enough mesh nod
 
 Partial data and metadata identify each attestation-data bucket by `sha256(attestation_data)`.
 For each peer, the full `attestation_data` is sent once per partial payload kind; later messages
-for the same bucket carry only the hash.
+for the same bucket carry only the hash. Metadata advertises committee-position deltas with
+`available_ids` and `requests_ids`; legacy bitmap fields are still decoded for compatibility, but
+new outgoing metadata does not populate them.
 
 Classic GossipSub IHAVE/IWANT gossip remains enabled by default, including in partial-message
 mode:
@@ -170,11 +172,12 @@ partial-priority the same way classic-vs-partial is compared today. Set `max_pee
 generously (≥ D) in partial-priority configs — it stays the only volume throttle (the per-position
 lifetime ceiling).
 
-`send_available_with_data: true` (default off) piggybacks the node's own validated bitmap onto a
-mesh peer's data message so peers learn our state and stop forwarding us attestations we already
-hold. It is attached only when we still hold more than fits the message (otherwise the data already
-conveys our state), at most once per peer per tick, and only on a message that also carries data
-(never on its own), so a mesh peer is not mistaken for a pull-only gossip peer. Note: at full
+`send_available_with_data: true` (default off) piggybacks the node's own validated
+`available_ids` delta onto a mesh peer's data message so peers learn our state and stop forwarding
+us attestations we already hold. It is attached only when we still hold more than fits the message
+(otherwise the data already conveys our state), at most once per peer per tick, and only on a
+message that also carries data (never on its own), so a mesh peer is not mistaken for a pull-only
+gossip peer. Note: at full
 2000-attestor load this measured neutral — no tail improvement and no drop in duplicate receives,
 for ~+30–46% control bytes — because that tail is throughput-bound, not knowledge-bound. Kept
 default-off as a tool to revisit.
@@ -189,7 +192,8 @@ peers receive all missing attestations regardless of holder count; bitmap peers 
 items with holder count below `pushPeers + bitmapPeers/2`.
 
 Push and bitmap streams send the full `attestation_data` once per peer stream for each bucket, then
-refer to it by `sha256(attestation_data)`.
+refer to it by `sha256(attestation_data)`. Bitmap-stream advertisements use per-peer
+`available_ids` deltas.
 Enable it with:
 
 ```yaml

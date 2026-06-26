@@ -86,12 +86,12 @@ type Node struct {
 	// message (0 = default 30). Only meaningful when partial messages are on.
 	PartialPriorityMode       bool
 	MaxAttestationsPerMessage int
-	// SendAvailableWithData piggybacks our validated bitmap onto the first data
-	// message to each mesh peer per tick (partial-priority only), so peers learn
-	// our state and stop forwarding duplicates back. Never sent without data, so
-	// the receiver does not misclassify us as a gossip peer.
+	// SendAvailableWithData piggybacks our validated available_ids delta onto a
+	// data message to each mesh peer per tick (partial-priority only), so peers
+	// learn our state and stop forwarding duplicates back. Never sent without
+	// data, so the receiver does not misclassify us as a gossip peer.
 	SendAvailableWithData bool
-	// CommitteeSize is the wire-level capacity for attestor bitmaps. All
+	// CommitteeSize is the wire-level committee-position capacity. All
 	// committees share the same size (= num_attestors per topic).
 	CommitteeSize int
 

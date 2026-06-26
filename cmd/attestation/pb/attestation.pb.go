@@ -266,17 +266,19 @@ func (x *BatchedAttestation) GetAttestationDataHash() []byte {
 }
 
 // CommitteeAttestationPartsMetadata is the per-AttestationData gossip control
-// envelope. `available` advertises the positions the sender holds; `requests`
-// is a non-persistent IWANT — the receiver satisfies what it can on its next
-// publish tick and forgets the rest. Both fields are fixed-width bitmaps of
-// length `committee_size`.
+// envelope. `available_ids` advertises the committee positions the sender holds;
+// `requests_ids` is a non-persistent IWANT — the receiver satisfies what it can
+// on its next publish tick and forgets the rest. The legacy `available` and
+// `requests` bitmap fields are decode-only compatibility fields.
 type CommitteeAttestationPartsMetadata struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Slot                int32                  `protobuf:"varint,1,opt,name=slot,proto3" json:"slot,omitempty"` // redundant with attestation_data per spec
 	AttestationData     []byte                 `protobuf:"bytes,2,opt,name=attestation_data,json=attestationData,proto3" json:"attestation_data,omitempty"`
-	Available           []byte                 `protobuf:"bytes,3,opt,name=available,proto3" json:"available,omitempty"`                                                  // bitmap[committee_size]
-	Requests            []byte                 `protobuf:"bytes,4,opt,name=requests,proto3" json:"requests,omitempty"`                                                    // bitmap[committee_size]
+	Available           []byte                 `protobuf:"bytes,3,opt,name=available,proto3" json:"available,omitempty"`                                                  // legacy bitmap[committee_size], decode-only
+	Requests            []byte                 `protobuf:"bytes,4,opt,name=requests,proto3" json:"requests,omitempty"`                                                    // legacy bitmap[committee_size], decode-only
 	AttestationDataHash []byte                 `protobuf:"bytes,5,opt,name=attestation_data_hash,json=attestationDataHash,proto3" json:"attestation_data_hash,omitempty"` // sha256(attestation_data), used after the first full-data send
+	AvailableIds        []uint32               `protobuf:"varint,6,rep,packed,name=available_ids,json=availableIds,proto3" json:"available_ids,omitempty"`                // committee positions; values < committee_size
+	RequestsIds         []uint32               `protobuf:"varint,7,rep,packed,name=requests_ids,json=requestsIds,proto3" json:"requests_ids,omitempty"`                   // committee positions; values < committee_size
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -342,6 +344,20 @@ func (x *CommitteeAttestationPartsMetadata) GetRequests() []byte {
 func (x *CommitteeAttestationPartsMetadata) GetAttestationDataHash() []byte {
 	if x != nil {
 		return x.AttestationDataHash
+	}
+	return nil
+}
+
+func (x *CommitteeAttestationPartsMetadata) GetAvailableIds() []uint32 {
+	if x != nil {
+		return x.AvailableIds
+	}
+	return nil
+}
+
+func (x *CommitteeAttestationPartsMetadata) GetRequestsIds() []uint32 {
+	if x != nil {
+		return x.RequestsIds
 	}
 	return nil
 }
@@ -555,13 +571,15 @@ const file_attestation_proto_rawDesc = "" +
 	"\n" +
 	"signatures\x18\x03 \x03(\fR\n" +
 	"signatures\x122\n" +
-	"\x15attestation_data_hash\x18\x04 \x01(\fR\x13attestationDataHash\"\xd0\x01\n" +
+	"\x15attestation_data_hash\x18\x04 \x01(\fR\x13attestationDataHash\"\x98\x02\n" +
 	"!CommitteeAttestationPartsMetadata\x12\x12\n" +
 	"\x04slot\x18\x01 \x01(\x05R\x04slot\x12)\n" +
 	"\x10attestation_data\x18\x02 \x01(\fR\x0fattestationData\x12\x1c\n" +
 	"\tavailable\x18\x03 \x01(\fR\tavailable\x12\x1a\n" +
 	"\brequests\x18\x04 \x01(\fR\brequests\x122\n" +
-	"\x15attestation_data_hash\x18\x05 \x01(\fR\x13attestationDataHash\"_\n" +
+	"\x15attestation_data_hash\x18\x05 \x01(\fR\x13attestationDataHash\x12#\n" +
+	"\ravailable_ids\x18\x06 \x03(\rR\favailableIds\x12!\n" +
+	"\frequests_ids\x18\a \x03(\rR\vrequestsIds\"_\n" +
 	"\x0fControlEnvelope\x12L\n" +
 	"\tmetadatas\x18\x01 \x03(\v2..attestation.CommitteeAttestationPartsMetadataR\tmetadatas\"W\n" +
 	"\x1aBatchedAttestationEnvelope\x129\n" +

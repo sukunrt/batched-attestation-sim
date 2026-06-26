@@ -119,7 +119,7 @@ func TestLogReceivedFrameAccounting(t *testing.T) {
 	bmEnv := &pb.ControlEnvelope{Metadatas: []*pb.CommitteeAttestationPartsMetadata{{
 		Slot:            3,
 		AttestationData: []byte{9},
-		Available:       []byte{0b10110000},
+		AvailableIds:    []uint32{0, 2, 3},
 	}}}
 	bmFrame, err := proto.Marshal(bmEnv)
 	require.NoError(t, err)

@@ -1,6 +1,7 @@
 package attprop
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/libp2p/go-libp2p-pubsub/partialmessages/bitmap"
@@ -10,16 +11,17 @@ import (
 )
 
 // bitmap_stream.go implements the bitmap advertisement stream (§D): full
-// available-only bitmaps per active bucket, triggered by the periodic floor
-// tick (re-emit only if changed), sent to bitmap-mesh peers only and bypassing
-// the send budget.
+// available state per active bucket is queued internally, triggered by the
+// periodic floor tick (re-emit only if changed), then each bitmap writer emits
+// per-peer available_ids deltas to bitmap-mesh peers only and bypasses the send
+// budget.
 
-// buildAvailableEnvelope assembles an available-only pb.ControlEnvelope (one
-// CommitteeAttestationPartsMetadata per bucket, available set from validated, no
-// requests) for a (topic, slot). Returns nil when nothing is
-// validated yet (§D1). Used to dump the full current bitmap to a peer on a fresh
-// Graft:Bitmap; it does not touch lastEmitted (that tracks the floor broadcast,
-// not point-to-point dumps). Eventloop-only (no lock).
+// buildAvailableEnvelope assembles an internal full-availability
+// pb.ControlEnvelope (one CommitteeAttestationPartsMetadata per bucket,
+// available set from validated, no requests) for a (topic, slot). Returns nil
+// when nothing is validated yet (§D1). Used to seed a peer's bitmap writer on a
+// fresh Graft:Bitmap; it does not touch lastEmitted (that tracks the floor
+// broadcast, not point-to-point dumps). Eventloop-only (no lock).
 func (m *Manager) buildAvailableEnvelope(slot int) *pb.ControlEnvelope {
 	ss := m.getSlotState(slot)
 	if ss == nil {
@@ -42,6 +44,10 @@ func (m *Manager) buildAvailableEnvelope(slot int) *pb.ControlEnvelope {
 		return nil
 	}
 	return ctrl
+}
+
+func errMetadataIDOutOfRange(id uint32, committeeSize int) error {
+	return fmt.Errorf("metadata id %d >= committee_size %d", id, committeeSize)
 }
 
 // validatedBitmap returns a fresh committee bitmap with a bucket's validated
@@ -97,6 +103,9 @@ func (m *Manager) emitBitmaps() {
 // changedAvailableEnvelope builds the available envelope for a slot, recording
 // each bucket's emitted bitmap as lastEmitted. Buckets whose bitmap is unchanged
 // since lastEmitted are skipped. Returns nil when nothing would be sent.
+//
+// We MUST emit the AVAILABLE bitmap.
+// deduping into ids happens in the bitmap writer.
 func (m *Manager) changedAvailableEnvelope(ss *slotState, slot int) *pb.ControlEnvelope {
 	ctrl := &pb.ControlEnvelope{}
 	for _, bk := range bucketKeys(ss) {
@@ -150,11 +159,29 @@ func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
 		ss := m.getOrCreateSlotState(slot)
 		b := ss.getOrCreateBucket(data, hash)
 
-		avail := bitmap.Bitmap(md.Available)
 		flips := 0
-		for pos := 0; pos < m.cfg.CommitteeSize; pos++ {
-			if avail.Get(pos) && ss.markHolder(b, from, pos) {
+		availableOnes := 0
+		for _, id := range md.AvailableIds {
+			if int(id) >= m.cfg.CommitteeSize {
+				m.logger.Error("CRITICAL: attprop_recv_bad_metadata",
+					"from", shortPeer(from),
+					"err", errMetadataIDOutOfRange(id, m.cfg.CommitteeSize))
+				continue
+			}
+			availableOnes++
+			if ss.markHolder(b, from, int(id)) {
 				flips++
+			}
+		}
+		if len(md.Available) > 0 {
+			bm := bitmap.Bitmap(md.Available)
+			for pos := 0; pos < m.cfg.CommitteeSize; pos++ {
+				if bm.Get(pos) {
+					availableOnes++
+					if ss.markHolder(b, from, pos) {
+						flips++
+					}
+				}
 			}
 		}
 		m.logger.Info("partial_recv_metadata",
@@ -162,9 +189,10 @@ func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
 			"slot", slot,
 			"topic", m.cfg.TopicIndex,
 			"att_digest", digestHex(data, hash),
-			"available_ones", avail.OnesCount(),
+			"available_ones", availableOnes,
 			"requests_ones", 0,
 			"holder_flips", flips,
+			"available_ids_len", len(md.AvailableIds),
 		)
 	}
 }

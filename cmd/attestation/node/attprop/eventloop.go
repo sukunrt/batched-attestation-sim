@@ -495,9 +495,10 @@ func (m *Manager) peerRTT(p peer.ID) (time.Duration, bool) {
 	return 0, false
 }
 
-// sendFullBitmapTo dumps our full current available bitmap (every active slot)
-// to one peer on its bitmap writer, bypassing the budget. Used when a peer first
-// enters our bitmap mesh (§D1).
+// sendFullBitmapTo queues our full current available state (every active slot)
+// to one peer's bitmap writer, bypassing the budget. The writer emits only the
+// peer's missing available_ids. Used when a peer first enters our bitmap mesh
+// (§D1).
 func (m *Manager) sendFullBitmapTo(p peer.ID) {
 	w, ok := m.bitmapWriters[p]
 	if !ok {

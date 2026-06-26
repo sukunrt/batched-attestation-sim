@@ -113,10 +113,11 @@ use_partial_messages: true
 The partial-message path implements the spec at
 `../ethp2p/specs/draft-committee-attestation.md`. Wire shape:
 
-- `BatchedAttestation { attestation_data | attestation_data_hash, attestor_indices
-  (bitmap[num_attestors]), signatures[] }`.
-- `CommitteeAttestationPartsMetadata { slot, attestation_data | attestation_data_hash, available
-  (bitmap), requests (bitmap) }`.
+- `BatchedAttestation { attestation_data | attestation_data_hash, attestor_indices[],
+  signatures[] }`.
+- `CommitteeAttestationPartsMetadata { slot, attestation_data | attestation_data_hash,
+  available_ids[], requests_ids[] }`. Legacy `available` / `requests` bitmap fields remain
+  decode-compatible only; new sends leave them empty.
 - `ControlEnvelope` wraps `repeated CommitteeAttestationPartsMetadata` per peer per tick.
 - `BatchedAttestationEnvelope` wraps `repeated BatchedAttestation` per peer per tick.
 
@@ -128,8 +129,9 @@ written to `schedule.json` as `committee_membership: {topic_id: [node_nums…]}`
 and plumbed to each Go process via the `-committee-memberships=t0:p0;t1:p1`
 CLI flag. Position is the index into the per-topic committee list; node
 identity (`node_num`) is decoupled from committee position. The
-`attestor_indices` / `available` / `requests` bitmaps are sized
-`ceil(num_attestors / 8)` bytes.
+`attestor_indices`, `available_ids`, and `requests_ids` values are committee positions, not node
+numbers. Metadata IDs are sent as per-peer, per-bucket deltas: once a peer has been informed about
+a position for a bucket, later metadata to that peer omits it.
 
 In partial-message mode:
 
@@ -149,9 +151,10 @@ In partial-message mode:
    registered in this mode.
 
 Per spec, mesh peers receive only `BatchedAttestation` (no metadata); gossip
-peers receive metadata advertising `available` and may include `requests`.
+peers receive metadata advertising `available_ids` and may include `requests_ids`.
 Requests are non-persistent — satisfied on the next outgoing publish tick and
-cleared, never queued.
+cleared, never queued. Outbound request IDs are also delta-compressed per peer/bucket, so the same
+peer is not repeatedly asked for the same position in later metadata.
 
 In this repo, "classic gossipsub" with partial messages means normal gossipsub IHAVE/IWANT gossip
 remains enabled. Configure it with:
@@ -180,21 +183,21 @@ every peer is drained. Each message holds the least-forwarded validated attestat
 lacks, drawn across all buckets in `sendCount` order; every draw is committed (bumps `sendCount`)
 before the next peer is served, so a peer's pick reflects what the prior peers just took —
 spreading scarce attestations across peers instead of draining one peer fully first. The gossip
-`available`/`requests` advertisement is its own separate metadata-only message. Nothing sendable is
+`available_ids`/`requests_ids` advertisement is its own separate metadata-only message. Nothing sendable is
 dropped — N caps message size, not per-tick volume; `max_peers_per_attestation` stays the only
 volume throttle (the per-position lifetime ceiling), so set it generously (≥ D).
 
 `send_available_with_data: true` (partial-priority only, default false) piggybacks the node's own
-validated bitmap (its `available` for every bucket) onto a mesh peer's data message, so the peer
-learns our full state and stops forwarding us positions we already hold. The bitmap is attached
+validated `available_ids` delta for every bucket onto a mesh peer's data message, so the peer
+learns our state and stops forwarding us positions we already hold. The metadata is attached
 **only when we still hold more positions the peer needs than fit in this message** (`more` from
 `selectOneChunkForPeer`) — if the message already carries everything we have for the peer, the data
-itself conveys our state and the bitmap would be pure overhead. It is sent at most once per peer per
+itself conveys our state and the metadata would be pure overhead. It is sent at most once per peer per
 tick, rides the same RPC as the data (one `CommitteeAttestationPartsMetadata` per bucket,
-`available` only), and is never a standalone message. That last point is required: a peer is
+`available_ids` only), and is never a standalone message. That last point is required: a peer is
 classified as a **gossip peer** when it sends a **metadata-only** RPC, so the receiver only flips a
 sender to gossip when the RPC carries no data batches — a mesh peer's available-plus-data piggyback
-keeps it classified as mesh. Gossip peers are skipped (they already get `available` via their
+keeps it classified as mesh. Gossip peers are skipped (they already get `available_ids` via their
 separate metadata-only message).
 
 **Measured neutral at full load.** At 500-mesh / 2000-attestor / 2-topic load this did **not** cut
@@ -248,7 +251,9 @@ count, while bitmap peers receive only entries with holder count below
 `pushPeers + bitmapPeers/2`, throttled by the per-topic send budget `B`.
 Buckets are keyed by `sha256(attestation_data)`. Push and bitmap streams each send full
 `attestation_data` once per peer stream for a bucket, then send only `attestation_data_hash`; each
-manager caches `sha256(attestation_data) => attestation_data` for validation and tracing.
+manager caches `sha256(attestation_data) => attestation_data` for validation and tracing. Bitmap
+streams queue the latest full available state internally, but each per-peer writer emits only
+`available_ids` deltas and leaves legacy bitmap fields empty.
 
 Mode bool plumbing mirrors `partial_priority`: simctl writes the `att_propagation` key (plus the
 `attprop_*` tunables and `max_attestations_per_message`) into `config.yaml` from the Pydantic model,

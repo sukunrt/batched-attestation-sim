@@ -12,7 +12,6 @@ import (
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p-pubsub/partialmessages"
-	"github.com/libp2p/go-libp2p-pubsub/partialmessages/bitmap"
 	pubsub_pb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
@@ -436,11 +435,11 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 						continue
 					}
 					action := partialmessages.PublishAction{EncodedPartialMessage: encodedData}
-					// Piggyback our available bitmap onto this (data-carrying)
+					// Piggyback our available_ids delta onto this (data-carrying)
 					// message for a mesh peer, but ONLY when we still hold more the
 					// peer needs beyond this chunk (`more`) — if this message already
 					// carries everything we have for the peer, the data conveys our
-					// state and the bitmap is pure overhead. Once per tick per peer,
+					// state and the metadata is pure overhead. Once per tick per peer,
 					// gossip peers excluded (they get available via the metadata
 					// action below). Never sent without data, so the receiver won't
 					// reclassify us as a gossip peer.
@@ -485,7 +484,8 @@ func (m *priorityAttestationManager) publishActions(topic string, slot int) part
 					ctrl := &pb.ControlEnvelope{}
 					for attDataStr, b := range ss.attestationsMap {
 						wantList := wantPerPeerPerData[p][attDataStr]
-						md := getAttestationMetadata(b, m.committeeSize, slot, wantList, ps.sendAvailableList)
+						bps := initAndGetPeerAttestationState(b, p, m.committeeSize)
+						md := getDeltaAttestationMetadata(b, bps, m.committeeSize, slot, wantList, ps.sendAvailableList)
 						if md != nil {
 							m.setMetadataIdentityForPeer(p, b, md)
 							ctrl.Metadatas = append(ctrl.Metadatas, md)
@@ -541,7 +541,8 @@ func (m *priorityAttestationManager) buildAvailableEnvelopeForPeer(
 	ctrl := &pb.ControlEnvelope{}
 	for _, bk := range bks {
 		b := ss.attestationsMap[bk]
-		if md := getAttestationMetadata(b, m.committeeSize, slot, nil, true); md != nil {
+		bps := initAndGetPeerAttestationState(b, p, m.committeeSize)
+		if md := getDeltaAttestationMetadata(b, bps, m.committeeSize, slot, nil, true); md != nil {
 			m.setMetadataIdentityForPeer(p, b, md)
 			ctrl.Metadatas = append(ctrl.Metadatas, md)
 		}
@@ -776,11 +777,17 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 		b := m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
 		bps := initAndGetPeerAttestationState(b, from, m.committeeSize)
 
-		available := bitmap.Bitmap(md.Available)
-		bps.available.Or(md.Available)
+		available, err := metadataBitmap(md.AvailableIds, md.Available, m.committeeSize)
+		if err != nil {
+			return err
+		}
+		bps.available.Or(available)
 
-		requests := bitmap.Bitmap(md.Requests)
-		bps.pendingWant.Or(md.Requests)
+		requests, err := metadataBitmap(md.RequestsIds, md.Requests, m.committeeSize)
+		if err != nil {
+			return err
+		}
+		bps.pendingWant.Or(requests)
 
 		if !hasData && (available.OnesCount() > 0 || requests.OnesCount() > 0) {
 			ps := peerStates[from]

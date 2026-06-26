@@ -465,13 +465,13 @@ func TestPriorityRoundRobinSpreadsAcrossPeers(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// SendAvailableWithData — piggyback our validated bitmap onto a mesh peer's data
+// SendAvailableWithData — piggyback our validated available_ids onto a mesh peer's data
 // message, but ONLY when we still hold more the peer needs beyond that message,
-// so peers stop forwarding us duplicates without paying for redundant bitmaps.
+// so peers stop forwarding us duplicates without paying for redundant metadata.
 // -----------------------------------------------------------------------------
 
 // (a) When we hold more than fits one message, the first data message to a mesh
-// peer carries our full validated bitmap; later messages that tick carry data only.
+// peer carries our full validated ID delta; later messages that tick carry data only.
 func TestPriorityAvailablePiggybackedOnFirstMeshMessage(t *testing.T) {
 	m := newPriorityUnitManager(t) // MaxPeers=64, N=30
 	m.node.SendAvailableWithData = true
@@ -485,12 +485,14 @@ func TestPriorityAvailablePiggybackedOnFirstMeshMessage(t *testing.T) {
 	actions := dataActions(out[peer.ID("p0")])
 	require.Len(t, actions, 2, "50 positions at N=30 => two data messages")
 
-	require.NotNil(t, actions[0].ctrl, "first message carries our available bitmap")
+	require.NotNil(t, actions[0].ctrl, "first message carries our available IDs")
 	require.Len(t, actions[0].ctrl.Metadatas, 1)
 	md := actions[0].ctrl.Metadatas[0]
 	assert.Equal(t, []byte("d"), md.AttestationData)
-	assert.Equal(t, bitmapWith(intRange(0, 50)...), md.Available, "advertises every validated position")
-	assert.Empty(t, md.Requests, "available piggyback never carries requests")
+	assert.Equal(t, indicesOf(intRange(0, 50)...), md.AvailableIds, "advertises every validated position")
+	assert.Empty(t, md.Available)
+	assert.Empty(t, md.RequestsIds, "available piggyback never carries requests")
+	assert.Empty(t, md.Requests)
 
 	assert.Nil(t, actions[1].ctrl, "second message to the same peer carries data only")
 }
@@ -579,7 +581,7 @@ func TestPriorityDataWithAvailableDoesNotReclassifyAsGossip(t *testing.T) {
 	md := &pb.CommitteeAttestationPartsMetadata{
 		Slot:            1,
 		AttestationData: []byte("d"),
-		Available:       bitmapWith(1, 2),
+		AvailableIds:    []uint32{1, 2},
 	}
 	batch := &pb.BatchedAttestation{
 		AttestationData: []byte("d"),
@@ -608,7 +610,7 @@ func TestPriorityDataWithAvailableDoesNotReclassifyAsGossip(t *testing.T) {
 	rpcMetaOnly := &pubsub_pb.PartialMessagesExtension{
 		TopicID:       &topic,
 		GroupID:       slotGroupID(1),
-		PartsMetadata: encodeControl(t, []*pb.CommitteeAttestationPartsMetadata{{Slot: 1, AttestationData: []byte("d"), Available: bitmapWith(3)}}),
+		PartsMetadata: encodeControl(t, []*pb.CommitteeAttestationPartsMetadata{{Slot: 1, AttestationData: []byte("d"), AvailableIds: []uint32{3}}}),
 	}
 	require.NoError(t, m.onIncomingRPC(pid, peers, rpcMetaOnly))
 	assert.True(t, peers[pid].gossipPeer, "metadata-only RPC marks the sender as a gossip peer")

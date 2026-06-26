@@ -110,30 +110,24 @@ func TestE2EMultiTopicPerTopicCommittees(t *testing.T) {
 			}
 		}
 
-		// Assertion 3: bitmaps built for this committee are sized to
-		// ceil(num_attestors/8) bytes — not committee_size * 256 or any
-		// global default.
-		wantBitmapBytes := (numAttestors + 7) / 8
+		// Assertion 3: metadata IDs are committee positions, not global node
+		// numbers, and legacy bitmap fields are not populated for outgoing
+		// metadata.
 		b := newAttestationState([]byte("probe"))
 		b.validated[0] = struct{}{}
 		b.validated[3] = struct{}{}
 		md := getAttestationMetadata(b, numAttestors, 1, nil, true)
 		require.NotNil(t, md)
-		assert.Equalf(t, wantBitmapBytes, len(md.Available),
-			"available bitmap must be %d bytes for num_attestors=%d (was %d)",
-			wantBitmapBytes, numAttestors, len(md.Available))
+		assert.Equal(t, []uint32{0, 3}, md.AvailableIds)
+		assert.Empty(t, md.Available)
 
 		req := getAttestationMetadata(b, numAttestors, 2, []int{1, 2}, false)
 		require.NotNil(t, req)
-		assert.Equalf(t, wantBitmapBytes, len(req.Requests),
-			"requests bitmap must be %d bytes for num_attestors=%d (was %d)",
-			wantBitmapBytes, numAttestors, len(req.Requests))
+		assert.Equal(t, []uint32{1, 2}, req.RequestsIds)
+		assert.Empty(t, req.Requests)
 
-		// Sanity: a position == node_num (e.g., 9) would not fit in this
-		// bitmap; the new bitmap is correctly sized to the per-topic
-		// committee, not the global node count.
-		assert.Lessf(t, wantBitmapBytes*8, 10,
-			"this test only meaningfully exercises the bug when committee bitmap < numNodes (got %d bits < %d nodes)",
-			wantBitmapBytes*8, numNodes)
+		// Sanity: position IDs remain scoped to the per-topic committee, not
+		// the global node count.
+		assert.Less(t, numAttestors, numNodes)
 	})
 }

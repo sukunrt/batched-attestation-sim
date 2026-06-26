@@ -44,12 +44,18 @@ type peerAttestationState struct {
 	// via metadata Want. Cleared on the next outgoing publish to the peer
 	// for this bucket — requests are non-persistent per spec.
 	pendingWant bitmap.Bitmap
+	// sentAvailable/sentRequests track metadata IDs already advertised to this
+	// peer for this bucket, so outgoing metadata can be encoded as deltas.
+	sentAvailable bitmap.Bitmap
+	sentRequests  bitmap.Bitmap
 }
 
 func newPeerAttestationState(committeeSize int) *peerAttestationState {
 	return &peerAttestationState{
-		available:   newCommitteeBitmap(committeeSize),
-		pendingWant: newCommitteeBitmap(committeeSize),
+		available:     newCommitteeBitmap(committeeSize),
+		pendingWant:   newCommitteeBitmap(committeeSize),
+		sentAvailable: newCommitteeBitmap(committeeSize),
+		sentRequests:  newCommitteeBitmap(committeeSize),
 	}
 }
 
@@ -444,7 +450,7 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 					// instead of every publish tick.
 					if ps.gossipPeer {
 						wantList := wantPerPeerPerData[p][attDataStr]
-						md := getAttestationMetadata(b, m.committeeSize, slot, wantList, ps.sendAvailableList)
+						md := getDeltaAttestationMetadata(b, bps, m.committeeSize, slot, wantList, ps.sendAvailableList)
 						if md != nil {
 							m.setMetadataIdentityForPeer(p, b, md)
 							ctrlEnvelope.Metadatas = append(ctrlEnvelope.Metadatas, md)
@@ -453,8 +459,8 @@ func (m *partialAttestationManager) publishActions(topic string, slot int) parti
 								"slot", slot,
 								"topic", m.topicIndexMap[topic],
 								"att_digest", attDigestHex(b.data),
-								"available_ones", availableOnes(md.Available),
-								"requests_ones", requestsOnes(md.Requests),
+								"available_ones", metadataOnes(md.AvailableIds, md.Available),
+								"requests_ones", metadataOnes(md.RequestsIds, md.Requests),
 								"md_bucket_bytes", proto.Size(md),
 								"send_want", len(wantList) > 0,
 							)
@@ -595,9 +601,9 @@ func selectIWantTargets(b *AttestationState, peerStates map[peer.ID]peerState, c
 }
 
 // getAttestationMetadata assembles a per-bucket CommitteeAttestationPartsMetadata.
-// `Available` is populated from the bucket's validated positions only when
-// `includeAvailable` is set (gated to the gossip heartbeat); `wantList`
-// populates `Requests` regardless. Returns nil if both would be empty.
+// AvailableIds is populated from the bucket's validated positions only when
+// includeAvailable is set (gated to the gossip heartbeat); wantList populates
+// RequestsIds regardless. Returns nil if both would be empty.
 func getAttestationMetadata(
 	b *AttestationState,
 	committeeSize int,
@@ -610,27 +616,105 @@ func getAttestationMetadata(
 	}
 
 	if includeAvailable && len(b.validated) > 0 {
-		avail := newCommitteeBitmap(committeeSize)
-		for pos := range b.validated {
-			avail.Set(pos)
-		}
-		if avail.OnesCount() > 0 {
-			md.Available = []byte(avail)
-		}
+		md.AvailableIds = validatedIDs(b, nil, committeeSize)
 	}
 
 	if len(wantList) > 0 {
-		req := newCommitteeBitmap(committeeSize)
-		for _, pos := range wantList {
-			req.Set(pos)
-		}
-		md.Requests = []byte(req)
+		md.RequestsIds = positionsToIDs(wantList, nil, committeeSize)
 	}
 
-	if len(md.Available) == 0 && len(md.Requests) == 0 {
+	if len(md.AvailableIds) == 0 && len(md.RequestsIds) == 0 {
 		return nil
 	}
 	return md
+}
+
+// getDeltaAttestationMetadata is the sender-side metadata builder. It emits
+// only IDs this peer has not already been told for this bucket and records the
+// IDs as sent before returning the metadata.
+func getDeltaAttestationMetadata(
+	b *AttestationState,
+	bps *peerAttestationState,
+	committeeSize int,
+	slot int,
+	wantList []int,
+	includeAvailable bool,
+) *pb.CommitteeAttestationPartsMetadata {
+	ensurePeerMetadataBitmaps(bps, committeeSize)
+	md := &pb.CommitteeAttestationPartsMetadata{Slot: int32(slot)}
+	if includeAvailable && len(b.validated) > 0 {
+		md.AvailableIds = validatedIDs(b, bps.sentAvailable, committeeSize)
+		for _, pos := range md.AvailableIds {
+			bps.sentAvailable.Set(int(pos))
+		}
+	}
+	if len(wantList) > 0 {
+		md.RequestsIds = positionsToIDs(wantList, bps.sentRequests, committeeSize)
+		for _, pos := range md.RequestsIds {
+			bps.sentRequests.Set(int(pos))
+		}
+	}
+	if len(md.AvailableIds) == 0 && len(md.RequestsIds) == 0 {
+		return nil
+	}
+	return md
+}
+
+func ensurePeerMetadataBitmaps(bps *peerAttestationState, committeeSize int) {
+	if bps.sentAvailable == nil {
+		bps.sentAvailable = newCommitteeBitmap(committeeSize)
+	}
+	if bps.sentRequests == nil {
+		bps.sentRequests = newCommitteeBitmap(committeeSize)
+	}
+}
+
+func validatedIDs(b *AttestationState, alreadySent bitmap.Bitmap, committeeSize int) []uint32 {
+	positions := make([]int, 0, len(b.validated))
+	for pos := range b.validated {
+		positions = append(positions, pos)
+	}
+	return positionsToIDs(positions, alreadySent, committeeSize)
+}
+
+func positionsToIDs(positions []int, alreadySent bitmap.Bitmap, committeeSize int) []uint32 {
+	if len(positions) == 0 {
+		return nil
+	}
+	positions = slices.Clone(positions)
+	slices.Sort(positions)
+	ids := make([]uint32, 0, len(positions))
+	for _, pos := range positions {
+		if pos < 0 || pos >= committeeSize {
+			continue
+		}
+		if alreadySent != nil && alreadySent.Get(pos) {
+			continue
+		}
+		ids = append(ids, uint32(pos))
+	}
+	return ids
+}
+
+func metadataBitmap(ids []uint32, legacy []byte, committeeSize int) (bitmap.Bitmap, error) {
+	out := newCommitteeBitmap(committeeSize)
+	for _, id := range ids {
+		if int(id) >= committeeSize {
+			return nil, fmt.Errorf("metadata id %d >= committee_size %d", id, committeeSize)
+		}
+		out.Set(int(id))
+	}
+	legacyBm := bitmap.Bitmap(legacy)
+	for pos := range committeeSize {
+		if legacyBm.Get(pos) {
+			out.Set(pos)
+		}
+	}
+	return out, nil
+}
+
+func metadataOnes(ids []uint32, legacy []byte) int {
+	return len(ids) + availableOnes(legacy)
 }
 
 // encodeBatch builds a BatchedAttestation for the given positions. Caller must
@@ -794,11 +878,17 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 		b := m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
 		bps := initAndGetPeerAttestationState(b, from, m.committeeSize)
 
-		available := bitmap.Bitmap(md.Available)
-		bps.available.Or(md.Available)
+		available, err := metadataBitmap(md.AvailableIds, md.Available, m.committeeSize)
+		if err != nil {
+			return err
+		}
+		bps.available.Or(available)
 
-		requests := bitmap.Bitmap(md.Requests)
-		bps.pendingWant.Or(md.Requests)
+		requests, err := metadataBitmap(md.RequestsIds, md.Requests, m.committeeSize)
+		if err != nil {
+			return err
+		}
+		bps.pendingWant.Or(requests)
 
 		// A peer issuing metadata is by definition a gossip peer. Marking it
 		// here also re-adds it to peerStates if a prior publish tick dropped

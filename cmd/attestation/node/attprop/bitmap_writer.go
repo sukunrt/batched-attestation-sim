@@ -3,6 +3,7 @@ package attprop
 import (
 	"sync"
 
+	"github.com/libp2p/go-libp2p-pubsub/partialmessages/bitmap"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
@@ -17,29 +18,33 @@ type bitmapKey struct {
 }
 
 // bitmapWriter owns one peer's outgoing bitmap stream. It keeps at most one
-// queued advertisement per (slot, attestation_data), replacing stale queued
-// state with the newest bitmap and coalescing pending advertisements into one
-// frame per write wakeup.
+// queue per (slot, attestation_data), coalescing each queue into one metadata
+// item per write wakeup.
 type bitmapWriter struct {
 	peer   peer.ID
 	stream network.Stream
 	w      msgio.WriteCloser
 	work   chan struct{}
 
-	mu       sync.Mutex
-	pending  map[bitmapKey]*pb.CommitteeAttestationPartsMetadata
-	sentFull map[string]struct{}
-	closed   bool
+	committeeSize int
+
+	mu            sync.Mutex
+	pending       map[bitmapKey][]*pb.CommitteeAttestationPartsMetadata
+	sentFull      map[string]struct{}
+	sentAvailable map[bitmapKey]bitmap.Bitmap
+	closed        bool
 }
 
 func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream) *bitmapWriter {
 	bw := &bitmapWriter{
-		peer:     p,
-		stream:   s,
-		w:        msgio.NewVarintWriter(s),
-		work:     make(chan struct{}, 1),
-		pending:  make(map[bitmapKey]*pb.CommitteeAttestationPartsMetadata),
-		sentFull: make(map[string]struct{}),
+		peer:          p,
+		stream:        s,
+		w:             msgio.NewVarintWriter(s),
+		work:          make(chan struct{}, 1),
+		committeeSize: m.cfg.CommitteeSize,
+		pending:       make(map[bitmapKey][]*pb.CommitteeAttestationPartsMetadata),
+		sentFull:      make(map[string]struct{}),
+		sentAvailable: make(map[bitmapKey]bitmap.Bitmap),
 	}
 	go func() {
 		for range bw.work {
@@ -78,13 +83,7 @@ func (w *bitmapWriter) enqueueBitmaps(mds []*pb.CommitteeAttestationPartsMetadat
 	}
 	for _, md := range mds {
 		key := bitmapKey{slot: md.Slot, hash: string(md.AttestationDataHash)}
-		queued := proto.Clone(md).(*pb.CommitteeAttestationPartsMetadata)
-		if _, sent := w.sentFull[key.hash]; sent {
-			queued.AttestationData = nil
-		} else if len(queued.AttestationData) == 0 && w.pending[key] != nil {
-			queued.AttestationData = w.pending[key].AttestationData
-		}
-		w.pending[key] = queued
+		w.pending[key] = append(w.pending[key], md)
 	}
 	select {
 	case w.work <- struct{}{}:
@@ -101,20 +100,71 @@ func (w *bitmapWriter) getNextBitmap() *pb.ControlEnvelope {
 	}
 
 	var mds []*pb.CommitteeAttestationPartsMetadata
-	for key, v := range w.pending {
-		v.AttestationDataHash = []byte(key.hash)
-		if _, sent := w.sentFull[key.hash]; sent {
-			v.AttestationData = nil
-		} else {
-			w.sentFull[key.hash] = struct{}{}
-			v.AttestationDataHash = nil
+	for key, queued := range w.pending {
+		if len(queued) == 0 {
+			delete(w.pending, key)
+			continue
 		}
-		mds = append(mds, v)
+		last := queued[len(queued)-1]
+		if w.sentAvailable[key] == nil {
+			w.sentAvailable[key] = newCommitteeBitmap(w.committeeSize)
+		}
+		ids := w.newAvailableIDs(w.sentAvailable[key], last.Available, queued)
+		if len(ids) == 0 {
+			continue
+		}
+
+		out := &pb.CommitteeAttestationPartsMetadata{
+			Slot:                last.Slot,
+			AttestationData:     last.AttestationData,
+			AttestationDataHash: []byte(key.hash),
+			AvailableIds:        ids,
+		}
+		if _, sent := w.sentFull[key.hash]; sent {
+			out.AttestationData = nil
+		} else if len(out.AttestationData) > 0 {
+			w.sentFull[key.hash] = struct{}{}
+			out.AttestationDataHash = nil
+		}
+		mds = append(mds, out)
 	}
 	clear(w.pending)
+	if len(mds) == 0 {
+		return nil
+	}
 	return &pb.ControlEnvelope{
 		Metadatas: mds,
 	}
+}
+
+func (w *bitmapWriter) newAvailableIDs(
+	lastSent bitmap.Bitmap,
+	current bitmap.Bitmap,
+	queued []*pb.CommitteeAttestationPartsMetadata,
+) []uint32 {
+	full := newCommitteeBitmap(w.committeeSize)
+	for pos := range w.committeeSize {
+		if current.Get(pos) {
+			full.Set(pos)
+		}
+	}
+	for _, md := range queued {
+		for _, id := range md.AvailableIds {
+			if int(id) < w.committeeSize {
+				full.Set(int(id))
+			}
+		}
+	}
+
+	ids := make([]uint32, 0, 32)
+	for pos := range w.committeeSize {
+		if !full.Get(pos) || lastSent.Get(pos) {
+			continue
+		}
+		ids = append(ids, uint32(pos))
+		lastSent.Set(pos)
+	}
+	return ids
 }
 
 func (w *bitmapWriter) closeAndReset() {

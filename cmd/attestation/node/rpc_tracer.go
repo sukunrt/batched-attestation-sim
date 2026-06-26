@@ -123,7 +123,7 @@ func partialDataStats(blob []byte) (
 
 // partialMetaStats decodes a ControlEnvelope (the partial-message metadata blob)
 // and returns the number of per-bucket metadata entries plus the total
-// available/requests bits advertised across them. Best-effort on failure.
+// available/request positions advertised across them. Best-effort on failure.
 func partialMetaStats(blob []byte) (mdCount, availOnes, reqOnes, attDataHashBytes int) {
 	if len(blob) == 0 {
 		return 0, 0, 0, 0
@@ -134,8 +134,8 @@ func partialMetaStats(blob []byte) (mdCount, availOnes, reqOnes, attDataHashByte
 	}
 	mdCount = len(ctrl.GetMetadatas())
 	for _, md := range ctrl.GetMetadatas() {
-		availOnes += availableOnes(md.GetAvailable())
-		reqOnes += requestsOnes(md.GetRequests())
+		availOnes += len(md.GetAvailableIds()) + availableOnes(md.GetAvailable())
+		reqOnes += len(md.GetRequestsIds()) + requestsOnes(md.GetRequests())
 		attDataHashBytes += len(md.GetAttestationDataHash())
 	}
 	return mdCount, availOnes, reqOnes, attDataHashBytes

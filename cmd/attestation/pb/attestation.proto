@@ -21,23 +21,25 @@ message Attestation {
 // Signatures are listed in the same order as `attestor_indices` (typically
 // ascending, but order is determined by the encoder).
 message BatchedAttestation {
-  bytes attestation_data       = 1; // opaque AttestationData (sized to attestation_data_size)
+  bytes attestation_data = 1; // opaque AttestationData (sized to attestation_data_size)
   repeated uint32 attestor_indices = 2; // committee positions; values < committee_size
-  repeated bytes signatures    = 3; // one per element of attestor_indices
-  bytes attestation_data_hash  = 4; // sha256(attestation_data), used after the first full-data send
+  repeated bytes signatures = 3; // one per element of attestor_indices
+  bytes attestation_data_hash = 4; // sha256(attestation_data), used after the first full-data send
 }
 
 // CommitteeAttestationPartsMetadata is the per-AttestationData gossip control
-// envelope. `available` advertises the positions the sender holds; `requests`
-// is a non-persistent IWANT — the receiver satisfies what it can on its next
-// publish tick and forgets the rest. Both fields are fixed-width bitmaps of
-// length `committee_size`.
+// envelope. `available_ids` advertises the committee positions the sender holds;
+// `requests_ids` is a non-persistent IWANT — the receiver satisfies what it can
+// on its next publish tick and forgets the rest. The legacy `available` and
+// `requests` bitmap fields are decode-only compatibility fields.
 message CommitteeAttestationPartsMetadata {
-  int32 slot              = 1; // redundant with attestation_data per spec
-  bytes attestation_data  = 2;
-  bytes available         = 3; // bitmap[committee_size]
-  bytes requests          = 4; // bitmap[committee_size]
+  int32 slot = 1; // redundant with attestation_data per spec
+  bytes attestation_data = 2;
+  bytes available = 3; // legacy bitmap[committee_size], decode-only
+  bytes requests = 4; // legacy bitmap[committee_size], decode-only
   bytes attestation_data_hash = 5; // sha256(attestation_data), used after the first full-data send
+  repeated uint32 available_ids = 6; // committee positions; values < committee_size
+  repeated uint32 requests_ids = 7; // committee positions; values < committee_size
 }
 
 // ControlEnvelope is the PartsMetadata blob: one envelope per (peer, tick)
@@ -64,16 +66,16 @@ enum AttPropMeshOp {
 // AttPropMesh names which mesh a control item applies to. FULL means both the
 // push and bitmap meshes (used by prune-with-backoff).
 enum AttPropMesh {
-  PUSH   = 0;
+  PUSH = 0;
   BITMAP = 1;
-  FULL   = 2;
+  FULL = 2;
 }
 
 // AttPropControlItem is one graft/prune instruction on the att_propagation
 // control stream: operation (graft/prune) on a given mesh (push/bitmap/full).
 message AttPropControlItem {
-  AttPropMeshOp op   = 1;
-  AttPropMesh   mesh = 2;
+  AttPropMeshOp op = 1;
+  AttPropMesh mesh = 2;
 }
 
 // AttPropControl wraps the graft/prune items sent in one control RPC.

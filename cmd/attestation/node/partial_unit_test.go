@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p-pubsub/partialmessages"
-	"github.com/libp2p/go-libp2p-pubsub/partialmessages/bitmap"
 	pubsub_pb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
@@ -224,14 +223,9 @@ func TestBatchedAttestationEnvelopeRoundtrip(t *testing.T) {
 }
 
 func TestControlEnvelopeRoundtrip(t *testing.T) {
-	avail := newCommitteeBitmap(testCommitteeSize)
-	avail.Set(1)
-	req := newCommitteeBitmap(testCommitteeSize)
-	req.Set(2)
-
 	env := &pb.ControlEnvelope{
 		Metadatas: []*pb.CommitteeAttestationPartsMetadata{
-			{Slot: 7, AttestationData: []byte("a"), Available: []byte(avail), Requests: []byte(req)},
+			{Slot: 7, AttestationData: []byte("a"), AvailableIds: []uint32{1}, RequestsIds: []uint32{2}},
 		},
 	}
 	encoded, err := proto.Marshal(env)
@@ -240,8 +234,8 @@ func TestControlEnvelopeRoundtrip(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(encoded, got))
 	require.Len(t, got.Metadatas, 1)
 	assert.Equal(t, int32(7), got.Metadatas[0].Slot)
-	gotAvail := bitmap.Bitmap(got.Metadatas[0].Available)
-	assert.True(t, gotAvail.Get(1))
+	assert.Equal(t, []uint32{1}, got.Metadatas[0].AvailableIds)
+	assert.Equal(t, []uint32{2}, got.Metadatas[0].RequestsIds)
 }
 
 // -----------------------------------------------------------------------------
@@ -262,10 +256,9 @@ func TestBuildBucketMetadataAvailableIncludesAllValidated(t *testing.T) {
 
 	got := getAttestationMetadata(b, testCommitteeSize, 1, nil, true)
 	require.NotNil(t, got)
-	gotBm := bitmap.Bitmap(got.Available)
-	assert.True(t, gotBm.Get(0))
-	assert.True(t, gotBm.Get(2))
-	assert.True(t, gotBm.Get(5))
+	assert.Equal(t, []uint32{0, 2, 5}, got.AvailableIds)
+	assert.Empty(t, got.Available)
+	assert.Empty(t, got.RequestsIds)
 	assert.Empty(t, got.Requests)
 }
 
@@ -273,11 +266,36 @@ func TestBuildBucketMetadataRequestsPopulated(t *testing.T) {
 	b := newAttestationState([]byte("d"))
 	got := getAttestationMetadata(b, testCommitteeSize, 1, []int{1, 4, 8}, false)
 	require.NotNil(t, got)
-	reqBm := bitmap.Bitmap(got.Requests)
-	for _, pos := range []int{1, 4, 8} {
-		assert.True(t, reqBm.Get(pos), "position %d should be set in requests", pos)
-	}
+	assert.Equal(t, []uint32{1, 4, 8}, got.RequestsIds)
 	assert.Empty(t, got.Available)
+	assert.Empty(t, got.AvailableIds)
+	assert.Empty(t, got.Requests)
+}
+
+func TestDeltaMetadataSendsOnlyNewIDsPerPeerBucket(t *testing.T) {
+	b := newAttestationState([]byte("d"))
+	for _, pos := range []int{0, 2, 5} {
+		b.validated[pos] = struct{}{}
+	}
+	bps := newPeerAttestationState(testCommitteeSize)
+
+	first := getDeltaAttestationMetadata(b, bps, testCommitteeSize, 1, []int{7, 9}, true)
+	require.NotNil(t, first)
+	assert.Equal(t, []uint32{0, 2, 5}, first.AvailableIds)
+	assert.Equal(t, []uint32{7, 9}, first.RequestsIds)
+	assert.Empty(t, first.Available)
+	assert.Empty(t, first.Requests)
+
+	b.validated[6] = struct{}{}
+	second := getDeltaAttestationMetadata(b, bps, testCommitteeSize, 1, []int{7, 10}, true)
+	require.NotNil(t, second)
+	assert.Equal(t, []uint32{6}, second.AvailableIds)
+	assert.Equal(t, []uint32{10}, second.RequestsIds)
+	assert.Empty(t, second.Available)
+	assert.Empty(t, second.Requests)
+
+	third := getDeltaAttestationMetadata(b, bps, testCommitteeSize, 1, []int{7, 10}, true)
+	assert.Nil(t, third)
 }
 
 func TestMetadataSendsFullDataOncePerPeer(t *testing.T) {
@@ -513,9 +531,10 @@ func TestPublishActionsGossipPeerGetsAvailableOnly(t *testing.T) {
 	require.Len(t, got.ctrl.Metadatas, 1)
 	md := got.ctrl.Metadatas[0]
 	assert.Equal(t, []byte("d"), md.AttestationData)
-	availBm := bitmap.Bitmap(md.Available)
-	assert.True(t, availBm.Get(0))
-	assert.Empty(t, md.Requests, "no peer advertises anything we lack ⇒ no Requests")
+	assert.Equal(t, []uint32{0}, md.AvailableIds)
+	assert.Empty(t, md.Available)
+	assert.Empty(t, md.RequestsIds, "no peer advertises anything we lack ⇒ no Requests")
+	assert.Empty(t, md.Requests)
 	assert.Nil(t, got.payload, "no pendingWant ⇒ no data to a gossip peer")
 }
 
@@ -570,7 +589,7 @@ func TestPublishActionsIHaveSentToAllEligibleGossipPeers(t *testing.T) {
 
 	var availRecipients int
 	for _, c := range out {
-		if c.ctrl != nil && len(c.ctrl.Metadatas) > 0 && len(c.ctrl.Metadatas[0].Available) > 0 {
+		if c.ctrl != nil && len(c.ctrl.Metadatas) > 0 && len(c.ctrl.Metadatas[0].AvailableIds) > 0 {
 			availRecipients++
 		}
 	}
@@ -597,7 +616,7 @@ func TestPublishActionsGossipPeerServedOncePerHeartbeat(t *testing.T) {
 	// First tick: gossip peer receives Available, then is dropped.
 	out := runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
 	require.NotNil(t, out[peer.ID("p0")].ctrl)
-	require.NotEmpty(t, out[peer.ID("p0")].ctrl.Metadatas[0].Available)
+	require.NotEmpty(t, out[peer.ID("p0")].ctrl.Metadatas[0].AvailableIds)
 
 	// Second tick with the same map: the dropped peer is no longer served.
 	out = runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
@@ -606,8 +625,7 @@ func TestPublishActionsGossipPeerServedOncePerHeartbeat(t *testing.T) {
 	// A heartbeat re-adds the peer; it is served Available again.
 	m.onEmitGossip("t0", slotGroupID(1), []peer.ID{peer.ID("p0")}, peers)
 	out = runPublishActions(t, m, "t0", 1, peers, peerDeclinesPartial)
-	require.NotNil(t, out[peer.ID("p0")].ctrl)
-	assert.NotEmpty(t, out[peer.ID("p0")].ctrl.Metadatas[0].Available)
+	assert.Empty(t, out, "delta metadata must not repeat already-advertised IDs")
 }
 
 func TestPublishActionsNoStateForSlotYieldsNothing(t *testing.T) {
@@ -705,7 +723,7 @@ func TestOnIncomingRPCAvailableMarksPeerGossipAndUpdatesAvailable(t *testing.T) 
 	md := &pb.CommitteeAttestationPartsMetadata{
 		Slot:            1,
 		AttestationData: []byte("d"),
-		Available:       bitmapWith(1, 2),
+		AvailableIds:    []uint32{1, 2},
 	}
 	rpc := &pubsub_pb.PartialMessagesExtension{
 		TopicID:       &topic,
@@ -725,6 +743,30 @@ func TestOnIncomingRPCAvailableMarksPeerGossipAndUpdatesAvailable(t *testing.T) 
 	assert.True(t, bps.available.Get(2))
 }
 
+func TestOnIncomingRPCLegacyAvailableBitmapStillDecodes(t *testing.T) {
+	m := newPartialUnitManager(t)
+	topic := "t0"
+	pid := peer.ID("p1")
+	peers := map[peer.ID]peerState{pid: {}}
+
+	md := &pb.CommitteeAttestationPartsMetadata{
+		Slot:            1,
+		AttestationData: []byte("d"),
+		Available:       bitmapWith(1, 2),
+	}
+	rpc := &pubsub_pb.PartialMessagesExtension{
+		TopicID:       &topic,
+		GroupID:       slotGroupID(1),
+		PartsMetadata: encodeControl(t, []*pb.CommitteeAttestationPartsMetadata{md}),
+	}
+	require.NoError(t, m.onIncomingRPC(pid, peers, rpc))
+
+	ss := m.getSlotState(topic, 1)
+	bps := ss.attestationsMap[testAttKey("d")].peers[pid]
+	assert.True(t, bps.available.Get(1))
+	assert.True(t, bps.available.Get(2))
+}
+
 func TestOnIncomingRPCRequestsUpdatesPendingWant(t *testing.T) {
 	m := newPartialUnitManager(t)
 	topic := "t0"
@@ -734,7 +776,7 @@ func TestOnIncomingRPCRequestsUpdatesPendingWant(t *testing.T) {
 	md := &pb.CommitteeAttestationPartsMetadata{
 		Slot:            1,
 		AttestationData: []byte("d"),
-		Requests:        bitmapWith(3),
+		RequestsIds:     []uint32{3},
 	}
 	rpc := &pubsub_pb.PartialMessagesExtension{
 		TopicID:       &topic,
@@ -748,6 +790,25 @@ func TestOnIncomingRPCRequestsUpdatesPendingWant(t *testing.T) {
 	b := ss.attestationsMap[testAttKey("d")]
 	bps := b.peers[pid]
 	assert.True(t, bps.pendingWant.Get(3))
+}
+
+func TestOnIncomingRPCInvalidMetadataIDReturnsError(t *testing.T) {
+	m := newPartialUnitManager(t)
+	topic := "t0"
+	pid := peer.ID("p1")
+	peers := map[peer.ID]peerState{pid: {}}
+
+	md := &pb.CommitteeAttestationPartsMetadata{
+		Slot:            1,
+		AttestationData: []byte("d"),
+		AvailableIds:    []uint32{uint32(testCommitteeSize)},
+	}
+	rpc := &pubsub_pb.PartialMessagesExtension{
+		TopicID:       &topic,
+		GroupID:       slotGroupID(1),
+		PartsMetadata: encodeControl(t, []*pb.CommitteeAttestationPartsMetadata{md}),
+	}
+	require.Error(t, m.onIncomingRPC(pid, peers, rpc))
 }
 
 func TestOnIncomingRPCPartialMessageInfersAvailable(t *testing.T) {

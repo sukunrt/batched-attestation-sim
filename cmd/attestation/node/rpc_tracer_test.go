@@ -268,7 +268,6 @@ func TestRPCTracerClassicFields(t *testing.T) {
 // data envelope (1 batch, 3 signatures over 128-byte data) plus a metadata
 // envelope (2 available, 1 requested) and checks the decoded accounting fields.
 func TestRPCTracerPartialFields(t *testing.T) {
-	const committeeSize = 8
 	encData, err := gproto.Marshal(&attpb.BatchedAttestationEnvelope{
 		Batches: []*attpb.BatchedAttestation{{
 			AttestationData: make([]byte, 128),
@@ -280,17 +279,12 @@ func TestRPCTracerPartialFields(t *testing.T) {
 		t.Fatalf("marshal data: %v", err)
 	}
 
-	avail := newCommitteeBitmap(committeeSize)
-	avail.Set(0)
-	avail.Set(1)
-	req := newCommitteeBitmap(committeeSize)
-	req.Set(3)
 	encMeta, err := gproto.Marshal(&attpb.ControlEnvelope{
 		Metadatas: []*attpb.CommitteeAttestationPartsMetadata{{
 			Slot:            1,
 			AttestationData: make([]byte, 128),
-			Available:       []byte(avail),
-			Requests:        []byte(req),
+			AvailableIds:    []uint32{0, 1},
+			RequestsIds:     []uint32{3},
 		}},
 	})
 	if err != nil {
@@ -350,19 +344,11 @@ func TestAttStatsHelpers(t *testing.T) {
 		t.Errorf("partialDataStats(nil) batches = %d, want 0", b)
 	}
 
-	// partial metadata: 2 metadatas, (2+1) available bits, (1+0) request bits
-	const committeeSize = 8
-	a1 := newCommitteeBitmap(committeeSize)
-	a1.Set(0)
-	a1.Set(5)
-	r1 := newCommitteeBitmap(committeeSize)
-	r1.Set(2)
-	a2 := newCommitteeBitmap(committeeSize)
-	a2.Set(7)
+	// partial metadata: 2 metadatas, (2+1) available IDs, (1+0) request IDs
 	encMeta, err := gproto.Marshal(&attpb.ControlEnvelope{
 		Metadatas: []*attpb.CommitteeAttestationPartsMetadata{
-			{Available: []byte(a1), Requests: []byte(r1)},
-			{Available: []byte(a2)},
+			{AvailableIds: []uint32{0, 5}, RequestsIds: []uint32{2}},
+			{AvailableIds: []uint32{7}},
 		},
 	})
 	if err != nil {

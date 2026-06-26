@@ -304,6 +304,7 @@ func attpropMetadataStats(ctrl *pb.ControlEnvelope) (
 		}
 		metaCount++
 		attDataHashBytes += len(md.AttestationDataHash)
+		availableOnes += len(md.AvailableIds)
 		for _, b := range md.Available {
 			availableOnes += bits.OnesCount8(b)
 		}
