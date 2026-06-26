@@ -54,7 +54,7 @@ func (m *Manager) fanoutPublish(slot, pos int, sig, data []byte) {
 			)
 			continue
 		}
-		if err := writeFrame(msgio.NewVarintWriter(s), frame); err != nil {
+		if err := m.writeFrameTimed(msgio.NewVarintWriter(s), frame, p, "fanout_push"); err != nil {
 			m.logger.Error("CRITICAL: fanout write",
 				"topic", m.cfg.TopicIndex,
 				"peer", shortPeer(p),

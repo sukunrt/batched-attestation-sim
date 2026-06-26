@@ -152,6 +152,7 @@ func (m *Manager) newPeerSender(
 	p peer.ID,
 	s network.Stream,
 	buf int,
+	writerType string,
 	done func(),
 ) *peerSender {
 	ps := &peerSender{
@@ -162,7 +163,7 @@ func (m *Manager) newPeerSender(
 	}
 	go func() {
 		for f := range ps.work {
-			if err := writeFrame(ps.w, f); err != nil {
+			if err := m.writeFrameTimed(ps.w, f, p, writerType); err != nil {
 				m.logger.Debug("write frame", "topic", m.cfg.TopicIndex, "peer", shortPeer(p), "err", err)
 				m.post(peerDownEvent{peer: p})
 				return
@@ -337,11 +338,11 @@ func (m *Manager) onPeerUp(e peerUpEvent) {
 		e.control.Reset()
 		return // already up (duplicate event)
 	}
-	m.senders[e.peer] = m.newPeerSender(e.peer, e.push, 1, func() {
+	m.senders[e.peer] = m.newPeerSender(e.peer, e.push, 1, "push", func() {
 		m.post(sendDoneEvent{peer: e.peer})
 	})
 	m.bitmapWriters[e.peer] = m.newBitmapWriter(e.peer, e.bitmap)
-	m.controlWriters[e.peer] = m.newPeerSender(e.peer, e.control, writerBuf, nil)
+	m.controlWriters[e.peer] = m.newPeerSender(e.peer, e.control, writerBuf, "control", nil)
 	m.mesh.roles[e.peer] = roleConnected
 	m.logger.Debug("peer_up", "topic", m.cfg.TopicIndex, "peer", shortPeer(e.peer))
 }

@@ -269,10 +269,11 @@ att_propagation reuses the partial-mode app-level receive keys — it logs `part
 `attprop_data_received`, `attprop_metadata_received`, and `attprop_control_received`. Outbound
 attprop logging includes `attprop_send_data` when a data frame is enqueued to a peer (`mesh`,
 `positions`, queue depth, in-flight counts, budget, and mesh sizes) and `attprop_send_bitmap` from
-the bitmap writer for each bitmap frame written. Mode detection labels it `att-propagation` (the
-first/most-specific branch). `analysis/prelim-analysis.py` parses the attprop wire keys for exact
-att_data/signature/control byte split and can print a standalone attprop-only run when no classic
-baseline is present.
+the bitmap writer for each bitmap frame written. Every successful attprop writer call also emits
+`attprop_write_frame` with `writer_type`, `bytes`, and `duration_ms`.
+Mode detection labels it `att-propagation` (the first/most-specific branch).
+`analysis/prelim-analysis.py` parses the attprop wire keys for exact att_data/signature/control byte
+split and can print a standalone attprop-only run when no classic baseline is present.
 
 ### Partial-mode log keys
 

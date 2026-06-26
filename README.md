@@ -224,7 +224,9 @@ Attprop bandwidth logging keeps the node-wide `bandwidth` row and also emits
 `attprop_peer_bandwidth` per peer with `role=push|bitmap|conn`.
 Outbound attprop logging includes `attprop_send_data` when a data frame is enqueued to a peer
 (`mesh`, `positions`, queue depth, in-flight counts, budget, and mesh sizes) and
-`attprop_send_bitmap` from the bitmap writer for each bitmap frame written.
+`attprop_send_bitmap` from the bitmap writer for each bitmap frame written. Every successful
+attprop writer call also emits `attprop_write_frame` with `writer_type`, `bytes`, and
+`duration_ms`.
 
 ## Analysis
 

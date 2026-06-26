@@ -59,7 +59,7 @@ func (m *Manager) newBitmapWriter(p peer.ID, s network.Stream) *bitmapWriter {
 			}
 			metaCount, availableOnes, attDataHashBytes := attpropMetadataStats(md)
 			attDataBytes := attpropMetadataDataBytes(md)
-			if err := writeFrame(bw.w, frame); err != nil {
+			if err := m.writeFrameTimed(bw.w, frame, p, "bitmap"); err != nil {
 				m.logger.Debug(
 					"write bitmap frame",
 					"topic", m.cfg.TopicIndex,

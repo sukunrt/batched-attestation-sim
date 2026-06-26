@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"math/bits"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -40,6 +41,27 @@ type peerStreams struct {
 // full QUIC flow-control window — that block is the send backpressure signal.
 func writeFrame(w msgio.WriteCloser, b []byte) error {
 	return w.WriteMsg(b)
+}
+
+func (m *Manager) writeFrameTimed(
+	w msgio.WriteCloser,
+	b []byte,
+	p peer.ID,
+	writerType string,
+) error {
+	start := time.Now()
+	err := writeFrame(w, b)
+	elapsed := time.Since(start)
+	if err == nil {
+		m.logger.Info("attprop_write_frame",
+			"peer", shortPeer(p),
+			"topic", m.cfg.TopicIndex,
+			"writer_type", writerType,
+			"bytes", len(b),
+			"duration_ms", elapsed.Milliseconds(),
+		)
+	}
+	return err
 }
 
 // newFrameReader wraps a stream in a varint reader capped at cfg.MaxMsgSize,
