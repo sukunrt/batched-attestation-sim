@@ -74,6 +74,7 @@ type partialEvent struct {
 	slot       int
 	topicIndex int
 	position   int
+	attDigest  string
 	latencyMs  int64
 }
 
@@ -100,7 +101,7 @@ func (t *testTracer) OnReceive(nodeNum int, att *pb.Attestation, topicIndex int,
 func (t *testTracer) OnPartialPublish(slot, topicIndex, position int, attData []byte) {
 	t.mu.Lock()
 	t.partialPublishes = append(t.partialPublishes, partialEvent{
-		slot: slot, topicIndex: topicIndex, position: position,
+		slot: slot, topicIndex: topicIndex, position: position, attDigest: attDigestHex(attData),
 	})
 	t.mu.Unlock()
 }
@@ -108,7 +109,7 @@ func (t *testTracer) OnPartialPublish(slot, topicIndex, position int, attData []
 func (t *testTracer) OnPartialReceive(slot, topicIndex, position int, attData []byte, latencyMs int64) {
 	t.mu.Lock()
 	t.partialReceives = append(t.partialReceives, partialEvent{
-		slot: slot, topicIndex: topicIndex, position: position, latencyMs: latencyMs,
+		slot: slot, topicIndex: topicIndex, position: position, attDigest: attDigestHex(attData), latencyMs: latencyMs,
 	})
 	t.mu.Unlock()
 }

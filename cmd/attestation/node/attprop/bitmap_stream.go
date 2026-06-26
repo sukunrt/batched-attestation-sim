@@ -135,6 +135,10 @@ func (m *Manager) changedAvailableEnvelope(
 func (m *Manager) onInboundBitmap(from peer.ID, ctrl *pb.ControlEnvelope) {
 	for _, md := range ctrl.Metadatas {
 		slot := int(md.Slot)
+		if !m.acceptsSlot(slot) {
+			m.logger.Debug("drop stale attprop bitmap", "from", shortPeer(from), "slot", slot)
+			continue
+		}
 		data := md.AttestationData
 		var hash []byte
 		if len(data) > 0 {

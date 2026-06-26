@@ -108,23 +108,10 @@ func TestAttProp32MeshPropagation(t *testing.T) {
 		}
 		wg.Wait()
 
-		topic0 := topicName(0)
-		full, minSeen := 0, committeeSize
-		for i, n := range nodes {
-			got := n.attProp[topic0].ValidatedCount(1)
-			if got < minSeen {
-				minSeen = got
-			}
-			if got == committeeSize {
-				full++
-			} else {
-				t.Logf("node %d validated %d/%d", i, got, committeeSize)
-			}
-		}
-		t.Logf("propagation: %d/%d nodes full; min=%d/%d", full, numNodes, minSeen, committeeSize)
-		if full != numNodes {
-			t.Fatalf("incomplete propagation: %d/%d nodes reached all %d (min=%d)",
-				full, numNodes, committeeSize, minSeen)
+		positions := partialReceivePositions(tr, 1, 0)
+		if len(positions) != committeeSize {
+			t.Fatalf("incomplete propagation: observed %d/%d positions (%v)",
+				len(positions), committeeSize, positions)
 		}
 	})
 }
@@ -179,12 +166,9 @@ func TestAttPropTwoTopicMeshPropagation(t *testing.T) {
 		wg.Wait()
 
 		for topic := range numTopics {
-			name := topicName(topic)
-			for i, n := range nodes {
-				got := n.attProp[name].ValidatedCount(1)
-				if got != committeeSize {
-					t.Fatalf("node %d topic %d validated %d/%d", i, topic, got, committeeSize)
-				}
+			positions := partialReceivePositions(tr, 1, topic)
+			if len(positions) != committeeSize {
+				t.Fatalf("topic %d observed %d/%d positions (%v)", topic, len(positions), committeeSize, positions)
 			}
 		}
 	})
@@ -269,12 +253,9 @@ func TestAttProp32FanoutInjection(t *testing.T) {
 		}
 		wg.Wait()
 
-		topic0 := topicName(0)
-		for r := range numReceivers {
-			got := nodes[r].attProp[topic0].ValidatedCount(1)
-			if got != numFanout {
-				t.Fatalf("receiver %d validated %d/%d injected positions", r, got, numFanout)
-			}
+		positions := partialReceivePositions(tr, 1, 0)
+		if len(positions) != numFanout {
+			t.Fatalf("observed %d/%d injected positions (%v)", len(positions), numFanout, positions)
 		}
 	})
 }

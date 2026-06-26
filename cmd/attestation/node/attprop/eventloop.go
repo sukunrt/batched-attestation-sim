@@ -103,6 +103,12 @@ type bitmapFloorEvent struct{}
 // maintenance (graft/prune toward target sizes, respecting backoff).
 type heartbeatEvent struct{}
 
+type slotLifecycleCmd struct {
+	slot  int
+	start bool
+	done  chan struct{}
+}
+
 func (inboundDataEvent) isEvent()    {}
 func (inboundBitmapEvent) isEvent()  {}
 func (inboundControlEvent) isEvent() {}
@@ -221,10 +227,52 @@ func (m *Manager) run(ctx context.Context) {
 		case <-ctx.Done():
 			m.shutdown()
 			return
+		case cmd := <-m.lifecycle:
+			m.onSlotLifecycle(cmd)
 		case ev := <-m.events:
 			m.dispatch(ev)
 		}
 	}
+}
+
+func (m *Manager) onSlotLifecycle(cmd slotLifecycleCmd) {
+	if cmd.start {
+		m.onSlotStart(cmd.slot)
+	} else {
+		m.onSlotEnd(cmd.slot)
+	}
+	close(cmd.done)
+}
+
+func (m *Manager) onSlotStart(slot int) {
+	m.lifecycleStarted = true
+	m.activeSlot = slot
+	for s := range m.slots {
+		if s < slot {
+			delete(m.slots, s)
+		}
+	}
+}
+
+func (m *Manager) onSlotEnd(slot int) {
+	m.lifecycleStarted = true
+	if slot > m.highestClosedSlot {
+		m.highestClosedSlot = slot
+	}
+	if m.activeSlot == slot {
+		m.activeSlot = 0
+	}
+	delete(m.slots, slot)
+}
+
+func (m *Manager) acceptsSlot(slot int) bool {
+	if slot <= m.highestClosedSlot {
+		return false
+	}
+	if m.lifecycleStarted && m.activeSlot != slot {
+		return false
+	}
+	return true
 }
 
 // dispatch routes one event to its handler and runs trySelectAndSend after the
@@ -627,6 +675,10 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 		}
 
 		slot := m.slotForHash(hash)
+		if !m.acceptsSlot(slot) {
+			m.logger.Debug("drop stale attprop data", "from", shortPeer(from), "slot", slot)
+			continue
+		}
 		ss := m.getOrCreateSlotState(slot)
 		b := ss.getOrCreateBucket(data, hash)
 
@@ -675,6 +727,9 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 // holder-count, bump the +K bitmap-trigger counter, and emit the validated log
 // (§G2/§H2). trySelectAndSend re-runs after (newly forwardable positions).
 func (m *Manager) onValidated(e validatedEvent) {
+	if !m.acceptsSlot(e.slot) {
+		return
+	}
 	ss := m.getSlotState(e.slot)
 	if ss == nil {
 		return
@@ -719,6 +774,9 @@ func (m *Manager) maybeEmitBitmap(ss *slotState) {
 // holder-count 0 (we are the origin; no peer holds it yet) — mirrors
 // partial_priority.publishLocal but from the eventloop goroutine (§F4).
 func (m *Manager) onPublishLocal(e publishLocalEvent) {
+	if !m.acceptsSlot(e.slot) {
+		return
+	}
 	ss := m.getOrCreateSlotState(e.slot)
 	hash := m.identities.Put(e.data)
 	b := ss.getOrCreateBucket(e.data, hash)
@@ -801,6 +859,9 @@ func (m *Manager) slotForHash(hash []byte) int {
 		if _, ok := ss.buckets[key]; ok {
 			return slot
 		}
+	}
+	if m.lifecycleStarted {
+		return m.activeSlot
 	}
 	return m.currentSlot()
 }

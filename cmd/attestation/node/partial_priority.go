@@ -160,6 +160,10 @@ type priorityAttestationManager struct {
 
 	mu    sync.Mutex
 	slots map[string]map[int]*prioritySlotState
+
+	lifecycleStarted  bool
+	activeSlot        int
+	highestClosedSlot int
 }
 
 func newPriorityAttestationManager(
@@ -217,6 +221,53 @@ func (m *priorityAttestationManager) getSlotState(topic string, slot int) *prior
 	return topicSlots[slot]
 }
 
+func (m *priorityAttestationManager) SlotStart(slot int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.lifecycleStarted = true
+	m.activeSlot = slot
+	for topic, topicSlots := range m.slots {
+		for s := range topicSlots {
+			if s < slot {
+				delete(topicSlots, s)
+			}
+		}
+		if len(topicSlots) == 0 {
+			delete(m.slots, topic)
+		}
+	}
+}
+
+func (m *priorityAttestationManager) SlotEnd(slot int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.lifecycleStarted = true
+	if slot > m.highestClosedSlot {
+		m.highestClosedSlot = slot
+	}
+	if m.activeSlot == slot {
+		m.activeSlot = 0
+	}
+	for topic, topicSlots := range m.slots {
+		delete(topicSlots, slot)
+		if len(topicSlots) == 0 {
+			delete(m.slots, topic)
+		}
+	}
+}
+
+func (m *priorityAttestationManager) acceptsSlotLocked(slot int) bool {
+	if slot <= m.highestClosedSlot {
+		return false
+	}
+	if m.lifecycleStarted && m.activeSlot != slot {
+		return false
+	}
+	return true
+}
+
 // getOrCreateBucket returns (creating as needed) the bucket for attestation_data
 // within a slot state, registering its stable bucket-order seq. Caller holds m.mu.
 func getOrCreateBucket(ss *prioritySlotState, data []byte, hashes ...[]byte) *AttestationState {
@@ -256,6 +307,9 @@ func (m *priorityAttestationManager) getOrCreateAttestationStateByHash(
 func (m *priorityAttestationManager) publishLocal(topic string, slot, position int, sig, data []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if !m.acceptsSlotLocked(slot) {
+		return
+	}
 	ss := m.getOrCreateSlotState(topic, slot)
 	hash := m.identities.remember(data)
 	b := getOrCreateBucket(ss, data, hash)
@@ -679,6 +733,10 @@ func (m *priorityAttestationManager) onIncomingRPC(from peer.ID, peerStates map[
 	topic := rpc.GetTopicID()
 	slot := groupIDToSlot(rpc.GroupID)
 	topicIdx := m.topicIndexMap[topic]
+	if !m.acceptsSlotLocked(slot) {
+		m.logger.Debug("drop stale partial rpc", "from", shortPeer(from), "slot", slot, "topic", topicIdx)
+		return nil
+	}
 
 	var ctrl pb.ControlEnvelope
 	if len(rpc.PartsMetadata) > 0 {

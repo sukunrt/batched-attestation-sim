@@ -123,6 +123,11 @@ type Manager struct {
 	// sole consumer.
 	events chan event
 
+	// lifecycle is the unbuffered ingress for slot-boundary commands. SlotStart
+	// and SlotEnd wait for the command ack, so the caller only advances after the
+	// eventloop has applied the state change.
+	lifecycle chan slotLifecycleCmd
+
 	// senders holds the per-peer data sender (push stream). One in-flight data
 	// frame per peer; the eventloop hands work off and waits
 	// for sendDoneEvent.
@@ -142,6 +147,10 @@ type Manager struct {
 	slots      map[int]*slotState
 	identities attestationDataCache
 	sentFull   map[peer.ID]map[string]struct{}
+
+	lifecycleStarted  bool
+	activeSlot        int
+	highestClosedSlot int
 
 	// activeData counts in-flight data sends gated by the budget B. Push sends
 	// are exempt (§F1) but still tracked here for observability.
@@ -177,6 +186,7 @@ func New(h host.Host, v *verify.Verifier, tr Tracer, cfg Config) *Manager {
 		logger:         logger,
 		self:           h.ID(),
 		events:         make(chan event, 256),
+		lifecycle:      make(chan slotLifecycleCmd),
 		senders:        make(map[peer.ID]*peerSender),
 		bitmapWriters:  make(map[peer.ID]*bitmapWriter),
 		controlWriters: make(map[peer.ID]*peerSender),
@@ -236,6 +246,29 @@ func (m *Manager) Run(ctx context.Context) {
 	go m.driveTimer(ctx, m.cfg.BitmapFloorInterval, func() event { return bitmapFloorEvent{} })
 	go m.driveTimer(ctx, m.cfg.HeartbeatInterval, func() event { return heartbeatEvent{} })
 	m.run(ctx)
+}
+
+// SlotStart marks slot as active and asks the eventloop to drop any older
+// top-level slot entries before the node publishes for this slot.
+func (m *Manager) SlotStart(slot int) {
+	if m.cfg.Fanout {
+		return
+	}
+	done := make(chan struct{})
+	m.lifecycle <- slotLifecycleCmd{slot: slot, start: true, done: done}
+	<-done
+}
+
+// SlotEnd marks slot as closed and asks the eventloop to drop its top-level slot
+// entry. The deleted slotState may still exist if another goroutine already held
+// a pointer, but normal lookup/iteration can no longer reach it.
+func (m *Manager) SlotEnd(slot int) {
+	if m.cfg.Fanout {
+		return
+	}
+	done := make(chan struct{})
+	m.lifecycle <- slotLifecycleCmd{slot: slot, done: done}
+	<-done
 }
 
 // PublishLocal injects this mesh node's own attestation into local state as

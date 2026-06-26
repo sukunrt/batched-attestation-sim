@@ -1,6 +1,7 @@
 package attprop
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ func schedManagerForTopic(
 			MaxAttsPerMessage: maxAttsPerMsg, SendBudgetB: budgetB, MaxPeersPerAtt: maxPeers,
 		},
 		events:         make(chan event, 1024),
+		lifecycle:      make(chan slotLifecycleCmd),
 		senders:        map[peer.ID]*peerSender{},
 		bitmapWriters:  map[peer.ID]*bitmapWriter{},
 		controlWriters: map[peer.ID]*peerSender{},
@@ -347,4 +349,49 @@ func TestInboundDataBadIndexDropsBatch(t *testing.T) {
 			require.Empty(t, b.atts, "bad batch dropped wholesale")
 		}
 	}
+}
+
+func TestSlotLifecycleChannelDropsTopLevelSlot(t *testing.T) {
+	m := schedManager(t, 30, 4, 1000)
+	require.Equal(t, 0, cap(m.lifecycle), "slot lifecycle channel must be unbuffered")
+
+	m.seedValidated(1, 1)
+	m.seedValidated(2, 2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		m.run(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	slotExists := func(slot int) bool {
+		out := make(chan bool, 1)
+		require.True(t, m.post(funcEvent{fn: func() {
+			out <- m.getSlotState(slot) != nil
+		}}))
+		return <-out
+	}
+
+	m.SlotStart(2)
+	require.False(t, slotExists(1), "SlotStart drops older top-level slot entries")
+	require.True(t, slotExists(2))
+
+	m.SlotEnd(2)
+	require.False(t, slotExists(2), "SlotEnd drops the top-level slot entry")
+
+	ctrl := &pb.ControlEnvelope{Metadatas: []*pb.CommitteeAttestationPartsMetadata{{
+		Slot:            2,
+		AttestationData: makeData(2),
+		Available:       []byte{0x02},
+	}}}
+	require.True(t, m.post(inboundBitmapEvent{from: pid(7), ctrl: ctrl}))
+
+	acked := make(chan struct{})
+	require.True(t, m.post(funcEvent{fn: func() { close(acked) }}))
+	<-acked
+	require.False(t, slotExists(2), "stale bitmap metadata must not recreate the closed slot")
 }

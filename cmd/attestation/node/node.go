@@ -139,6 +139,8 @@ type partialManager interface {
 	fanoutPublish(ps *pubsub.PubSub, topic string, slot, position int, signature, data []byte)
 	publishLocal(topic string, slot, position int, sig, data []byte)
 	newPartialMessagesExtension() *partialmessages.PartialMessagesExtension[peerState]
+	SlotStart(slot int)
+	SlotEnd(slot int)
 }
 
 // partialModeActive reports whether either partial-message strategy is enabled.
@@ -559,6 +561,7 @@ func (n *Node) runPartial(numSlots int, slotDuration time.Duration) {
 
 	for slot := 1; slot <= numSlots; slot++ {
 		n.logger.Info("starting slot", "slot", slot)
+		n.activePartialManager().SlotStart(slot)
 		slotEndTime := time.Now().Add(slotDuration)
 
 		if _, ok := n.PublishSlots[slot]; ok {
@@ -566,6 +569,7 @@ func (n *Node) runPartial(numSlots int, slotDuration time.Duration) {
 		}
 
 		time.Sleep(time.Until(slotEndTime))
+		n.activePartialManager().SlotEnd(slot)
 		n.logger.Info("slot complete", "slot", slot)
 	}
 
@@ -622,6 +626,9 @@ func (n *Node) runAttProp(numSlots int, slotDuration time.Duration) {
 	// the publish schedule and then drains.
 	for slot := 1; slot <= numSlots; slot++ {
 		n.logger.Info("starting slot", "slot", slot)
+		for _, m := range n.attProp {
+			m.SlotStart(slot)
+		}
 		slotEndTime := time.Now().Add(slotDuration)
 
 		if _, ok := n.PublishSlots[slot]; ok {
@@ -629,6 +636,9 @@ func (n *Node) runAttProp(numSlots int, slotDuration time.Duration) {
 		}
 
 		time.Sleep(time.Until(slotEndTime))
+		for _, m := range n.attProp {
+			m.SlotEnd(slot)
+		}
 		n.logger.Info("slot complete", "slot", slot)
 	}
 

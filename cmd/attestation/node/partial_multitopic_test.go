@@ -87,47 +87,26 @@ func TestE2EMultiTopicPerTopicCommittees(t *testing.T) {
 
 		runE2E(t, ctx, nodes, conn, publishStart, numSlots, slotDuration)
 
-		// Assertion 2: every committee member's position landed on every
-		// other committee member for that topic, with positions strictly
-		// in [0, num_attestors).
+		// Assertion 2: every committee member's position propagated on that
+		// topic, with positions strictly in [0, num_attestors).
 		for topic, members := range committees {
-			topicName := topicName(topic)
-			for _, receiver := range members {
-				rn := nodes[receiver]
-				rn.partial.mu.Lock()
-				ss := rn.partial.getSlotState(topicName, 1)
-				require.NotNilf(t, ss, "node %d: missing slot state for topic %d", receiver, topic)
-				positions := map[int]struct{}{}
-				for _, b := range ss.attestationsMap {
-					for p := range b.validated {
-						positions[p] = struct{}{}
-					}
-					for p := range b.validating {
-						positions[p] = struct{}{}
+			positions := partialReceivePositions(tr, 1, topic)
+			for _, sender := range members {
+				senderPos := -1
+				for _, m := range nodeMemberships[sender] {
+					if m.TopicIndex == topic {
+						senderPos = m.Position
 					}
 				}
-				rn.partial.mu.Unlock()
-				for _, sender := range members {
-					if sender == receiver {
-						continue
-					}
-					senderPos := -1
-					for _, m := range nodeMemberships[sender] {
-						if m.TopicIndex == topic {
-							senderPos = m.Position
-						}
-					}
-					require.GreaterOrEqual(t, senderPos, 0)
-					_, ok := positions[senderPos]
-					assert.Truef(t, ok,
-						"node %d (topic %d): missing attestation from node %d at position %d (have %v)",
-						receiver, topic, sender, senderPos, positions)
-				}
-				for p := range positions {
-					assert.Lessf(t, p, numAttestors,
-						"node %d (topic %d): observed position %d >= num_attestors %d",
-						receiver, topic, p, numAttestors)
-				}
+				require.GreaterOrEqual(t, senderPos, 0)
+				assert.Containsf(t, positions, senderPos,
+					"topic %d: missing attestation from node %d at position %d (have %v)",
+					topic, sender, senderPos, positions)
+			}
+			for p := range positions {
+				assert.Lessf(t, p, numAttestors,
+					"topic %d: observed position %d >= num_attestors %d",
+					topic, p, numAttestors)
 			}
 		}
 

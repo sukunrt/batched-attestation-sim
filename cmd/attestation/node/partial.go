@@ -149,6 +149,10 @@ type partialAttestationManager struct {
 
 	mu    sync.Mutex
 	slots map[string]map[int]*PartialAttestationSlotState
+
+	lifecycleStarted  bool
+	activeSlot        int
+	highestClosedSlot int
 }
 
 func newPartialAttestationManager(
@@ -204,6 +208,53 @@ func (m *partialAttestationManager) getSlotState(topic string, slot int) *Partia
 	return topicSlots[slot]
 }
 
+func (m *partialAttestationManager) SlotStart(slot int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.lifecycleStarted = true
+	m.activeSlot = slot
+	for topic, topicSlots := range m.slots {
+		for s := range topicSlots {
+			if s < slot {
+				delete(topicSlots, s)
+			}
+		}
+		if len(topicSlots) == 0 {
+			delete(m.slots, topic)
+		}
+	}
+}
+
+func (m *partialAttestationManager) SlotEnd(slot int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.lifecycleStarted = true
+	if slot > m.highestClosedSlot {
+		m.highestClosedSlot = slot
+	}
+	if m.activeSlot == slot {
+		m.activeSlot = 0
+	}
+	for topic, topicSlots := range m.slots {
+		delete(topicSlots, slot)
+		if len(topicSlots) == 0 {
+			delete(m.slots, topic)
+		}
+	}
+}
+
+func (m *partialAttestationManager) acceptsSlotLocked(slot int) bool {
+	if slot <= m.highestClosedSlot {
+		return false
+	}
+	if m.lifecycleStarted && m.activeSlot != slot {
+		return false
+	}
+	return true
+}
+
 func (m *partialAttestationManager) getOrCreateAttestationState(topic string, slot int, data []byte) *AttestationState {
 	hash := m.identities.remember(data)
 	return m.getOrCreateAttestationStateByHash(topic, slot, data, hash)
@@ -243,6 +294,9 @@ func initAndGetPeerAttestationState(b *AttestationState, p peer.ID, committeeSiz
 func (m *partialAttestationManager) publishLocal(topic string, slot, position int, sig, data []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if !m.acceptsSlotLocked(slot) {
+		return
+	}
 	b := m.getOrCreateAttestationState(topic, slot, data)
 	if _, ok := b.attestations[position]; ok {
 		return
@@ -701,6 +755,10 @@ func (m *partialAttestationManager) onIncomingRPC(from peer.ID, peerStates map[p
 	topic := rpc.GetTopicID()
 	slot := groupIDToSlot(rpc.GroupID)
 	topicIdx := m.topicIndexMap[topic]
+	if !m.acceptsSlotLocked(slot) {
+		m.logger.Debug("drop stale partial rpc", "from", shortPeer(from), "slot", slot, "topic", topicIdx)
+		return nil
+	}
 
 	var ctrl pb.ControlEnvelope
 	if len(rpc.PartsMetadata) > 0 {

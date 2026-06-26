@@ -670,6 +670,32 @@ func bitmapWith(positions ...int) []byte {
 	return []byte(bm)
 }
 
+func TestPartialSlotLifecycleDropsTopLevelSlot(t *testing.T) {
+	m := newPartialUnitManager(t)
+	topic := "t0"
+	pid := peer.ID("p1")
+
+	m.SlotStart(1)
+	m.publishLocal(topic, 1, 4, []byte("sig"), []byte("slot1"))
+	require.NotNil(t, m.getSlotState(topic, 1))
+
+	m.SlotEnd(1)
+	require.Nil(t, m.getSlotState(topic, 1), "SlotEnd drops the top-level slot entry")
+
+	batch := &pb.BatchedAttestation{
+		AttestationData: []byte("late-slot1"),
+		AttestorIndices: indicesOf(5),
+		Signatures:      [][]byte{[]byte("s5")},
+	}
+	rpc := &pubsub_pb.PartialMessagesExtension{
+		TopicID:        &topic,
+		GroupID:        slotGroupID(1),
+		PartialMessage: encodeData(t, []*pb.BatchedAttestation{batch}),
+	}
+	require.NoError(t, m.onIncomingRPC(pid, map[peer.ID]peerState{pid: {}}, rpc))
+	require.Nil(t, m.getSlotState(topic, 1), "stale inbound RPC must not recreate the closed slot")
+}
+
 func TestOnIncomingRPCAvailableMarksPeerGossipAndUpdatesAvailable(t *testing.T) {
 	m := newPartialUnitManager(t)
 	topic := "t0"

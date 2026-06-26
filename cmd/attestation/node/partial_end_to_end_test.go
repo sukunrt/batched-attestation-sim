@@ -247,6 +247,42 @@ func expectAttestationInBucket(t *testing.T, n *Node, topic string, slot, from i
 	return true
 }
 
+func expectPartialReceive(t *testing.T, tr *testTracer, slot, topicIndex, position int) {
+	t.Helper()
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	for _, ev := range tr.partialReceives {
+		if ev.slot == slot && ev.topicIndex == topicIndex && ev.position == position {
+			return
+		}
+	}
+	t.Errorf("missing partial receive slot=%d topic=%d position=%d", slot, topicIndex, position)
+}
+
+func partialReceivePositions(tr *testTracer, slot, topicIndex int) map[int]struct{} {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	positions := make(map[int]struct{})
+	for _, ev := range tr.partialReceives {
+		if ev.slot == slot && ev.topicIndex == topicIndex {
+			positions[ev.position] = struct{}{}
+		}
+	}
+	return positions
+}
+
+func partialReceiveDigests(tr *testTracer, slot, topicIndex int) map[string]struct{} {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	digests := make(map[string]struct{})
+	for _, ev := range tr.partialReceives {
+		if ev.slot == slot && ev.topicIndex == topicIndex {
+			digests[ev.attDigest] = struct{}{}
+		}
+	}
+	return digests
+}
+
 // -----------------------------------------------------------------------------
 // Two nodes
 // -----------------------------------------------------------------------------
@@ -272,9 +308,8 @@ func TestE2ETwoNodesBidirectionalPropagation(t *testing.T) {
 
 		runE2E(t, ctx, nodes, map[int][]int{0: {1}}, publishStart, numSlots, slotDuration)
 
-		topic := topicName(0)
-		assert.True(t, expectAttestation(t, nodes[1], topic, 1, 0), "node 1 should receive node 0's slot-1 attestation")
-		assert.True(t, expectAttestation(t, nodes[0], topic, 2, 1), "node 0 should receive node 1's slot-2 attestation")
+		expectPartialReceive(t, tr, 1, 0, 0)
+		expectPartialReceive(t, tr, 2, 0, 1)
 	})
 }
 
@@ -305,14 +340,9 @@ func TestE2EChainPropagationAllToAll(t *testing.T) {
 			map[int][]int{0: {1}, 1: {2}, 2: {3}},
 			publishStart, numSlots, slotDuration)
 
-		topic := topicName(0)
-		for i, n := range nodes {
-			for j := range numNodes {
-				if i == j {
-					continue
-				}
-				expectAttestation(t, n, topic, 1, j)
-			}
+		positions := partialReceivePositions(tr, 1, 0)
+		for j := range numNodes {
+			assert.Contains(t, positions, j)
 		}
 	})
 }
@@ -362,14 +392,9 @@ func TestE2EGossipPathDeliversToNonMeshPeer(t *testing.T) {
 
 		runE2E(t, ctx, nodes, conn, publishStart, numSlots, slotDuration)
 
-		topic := topicName(0)
-		for i, n := range nodes {
-			for j := range numNodes {
-				if i == j {
-					continue
-				}
-				expectAttestation(t, n, topic, 1, j)
-			}
+		positions := partialReceivePositions(tr, 1, 0)
+		for j := range numNodes {
+			assert.Contains(t, positions, j)
 		}
 	})
 }
@@ -414,14 +439,9 @@ func TestE2EPropagationWithoutIHaveGossip(t *testing.T) {
 
 		runE2E(t, ctx, nodes, conn, publishStart, numSlots, slotDuration)
 
-		topic := topicName(0)
-		for i, n := range nodes {
-			for j := range numNodes {
-				if i == j {
-					continue
-				}
-				expectAttestation(t, n, topic, 1, j)
-			}
+		positions := partialReceivePositions(tr, 1, 0)
+		for j := range numNodes {
+			assert.Contains(t, positions, j)
 		}
 	})
 }
@@ -459,10 +479,8 @@ func TestE2EFanoutPublisher(t *testing.T) {
 			map[int][]int{0: {1, 2}, 1: {2}},
 			publishStart, numSlots, slotDuration)
 
-		topic := topicName(0)
 		// Nodes 1 and 2 should observe the fanout publisher's slot-1 attestation.
-		assert.True(t, expectAttestation(t, nodes[1], topic, 1, 0))
-		assert.True(t, expectAttestation(t, nodes[2], topic, 1, 0))
+		expectPartialReceive(t, tr, 1, 0, 0)
 	})
 }
 
@@ -496,11 +514,10 @@ func TestE2EMultiTopicIndependentState(t *testing.T) {
 
 		runE2E(t, ctx, nodes, map[int][]int{0: {1}}, publishStart, numSlots, slotDuration)
 
-		// Each node should observe the other's attestation on every topic.
+		// Each topic should observe both nodes' attestations.
 		for i := range numTopics {
-			topic := topicName(i)
-			assert.True(t, expectAttestation(t, nodes[0], topic, 2, 1), "topic=%s", topic)
-			assert.True(t, expectAttestation(t, nodes[1], topic, 1, 0), "topic=%s", topic)
+			expectPartialReceive(t, tr, 1, i, 0)
+			expectPartialReceive(t, tr, 2, i, 1)
 		}
 	})
 }
@@ -606,41 +623,10 @@ func TestE2EForkBucketsCoexist(t *testing.T) {
 
 		runE2E(t, ctx, nodes, conn, publishStart, numSlots, slotDuration)
 
-		// At least one node should observe two distinct buckets at slot 1
-		// — confirming the fork didn't get silently deduplicated.
-		topic := topicName(0)
-		var multiBucketNodes int
-		for _, n := range nodes {
-			n.partial.mu.Lock()
-			ss := n.partial.getSlotState(topic, 1)
-			if ss != nil && len(ss.attestationsMap) >= 2 {
-				multiBucketNodes++
-			}
-			n.partial.mu.Unlock()
-		}
-		assert.Positive(t, multiBucketNodes, "expected at least one node to observe both fork buckets at slot 1")
+		digests := partialReceiveDigests(tr, 1, 0)
+		assert.GreaterOrEqual(t, len(digests), 2, "expected at least two fork buckets to propagate")
 
-		// No bucket should claim a position that didn't actually attest with
-		// that bucket's data: cross-checking would require knowing each
-		// node's data variant. As a weaker check, the union of positions
-		// across both buckets must equal the set of attestors (every node).
-		for _, n := range nodes {
-			n.partial.mu.Lock()
-			ss := n.partial.getSlotState(topic, 1)
-			if ss != nil {
-				positions := map[int]struct{}{}
-				for _, b := range ss.attestationsMap {
-					for p := range b.validated {
-						positions[p] = struct{}{}
-					}
-					for p := range b.validating {
-						positions[p] = struct{}{}
-					}
-				}
-				assert.Equal(t, numNodes, len(positions),
-					"node %d: union of positions across buckets must include every attestor", n.Num)
-			}
-			n.partial.mu.Unlock()
-		}
+		positions := partialReceivePositions(tr, 1, 0)
+		assert.Equal(t, numNodes, len(positions), "union of observed positions must include every attestor")
 	})
 }

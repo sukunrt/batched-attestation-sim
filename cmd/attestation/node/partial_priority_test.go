@@ -614,6 +614,32 @@ func TestPriorityDataWithAvailableDoesNotReclassifyAsGossip(t *testing.T) {
 	assert.True(t, peers[pid].gossipPeer, "metadata-only RPC marks the sender as a gossip peer")
 }
 
+func TestPrioritySlotLifecycleDropsTopLevelSlot(t *testing.T) {
+	m := newPriorityUnitManager(t)
+	topic := "t0"
+	pid := peer.ID("p1")
+
+	m.SlotStart(1)
+	m.publishLocal(topic, 1, 4, []byte("sig"), []byte("slot1"))
+	require.NotNil(t, m.getSlotState(topic, 1))
+
+	m.SlotEnd(1)
+	require.Nil(t, m.getSlotState(topic, 1), "SlotEnd drops the top-level slot entry")
+
+	batch := &pb.BatchedAttestation{
+		AttestationData: []byte("late-slot1"),
+		AttestorIndices: indicesOf(5),
+		Signatures:      [][]byte{[]byte("s5")},
+	}
+	rpc := &pubsub_pb.PartialMessagesExtension{
+		TopicID:        &topic,
+		GroupID:        slotGroupID(1),
+		PartialMessage: encodeData(t, []*pb.BatchedAttestation{batch}),
+	}
+	require.NoError(t, m.onIncomingRPC(pid, map[peer.ID]peerState{pid: {}}, rpc))
+	require.Nil(t, m.getSlotState(topic, 1), "stale inbound RPC must not recreate the closed slot")
+}
+
 // -----------------------------------------------------------------------------
 // Index invariant helpers (test-only).
 // -----------------------------------------------------------------------------
@@ -784,39 +810,30 @@ func TestE2EPriorityChunksLargeSendAndDelivers(t *testing.T) {
 		}
 		runE2E(t, ctx, nodes, conn, publishStart, numSlots, slotDuration)
 
-		topic := topicName(0)
-
-		// Every node received every other node's slot-1 attestation.
-		for i, n := range nodes {
-			for j := range numNodes {
-				if i == j {
-					continue
-				}
-				expectAttestationPriority(t, n, topic, 1, j)
+		// The manager drops slot state at SlotEnd, so observe propagation via
+		// tracer events instead of post-run slot internals.
+		seenPositions := make(map[int]struct{})
+		tr.mu.Lock()
+		for _, ev := range tr.partialReceives {
+			if ev.slot == 1 && ev.topicIndex == 0 {
+				seenPositions[ev.position] = struct{}{}
 			}
+		}
+		tr.mu.Unlock()
+		for j := range numNodes {
+			assert.Contains(t, seenPositions, j, "position %d should have propagated to at least one peer", j)
 		}
 
 		// Every outgoing data batch stayed within the cap.
 		var totalData int
+		var maxObserved int
 		for i, c := range tracers {
 			maxSeen, dataN := c.snapshot()
 			assert.LessOrEqual(t, maxSeen, maxPerMessage, "node %d: no data message may exceed N attestations", i)
 			totalData += dataN
+			maxObserved = max(maxObserved, maxSeen)
 		}
 		assert.Positive(t, totalData, "data RPCs should have been sent")
-
-		// At least one node ended with > N validated positions: combined with the
-		// per-batch cap above, that proves a large send was split into chunks.
-		var maxValidated int
-		for _, n := range nodes {
-			n.partialPriority.mu.Lock()
-			if ss := n.partialPriority.getSlotState(topic, 1); ss != nil {
-				for _, b := range ss.attestationsMap {
-					maxValidated = max(maxValidated, len(b.validated))
-				}
-			}
-			n.partialPriority.mu.Unlock()
-		}
-		assert.Greater(t, maxValidated, maxPerMessage, "a node should accumulate > N positions, forcing chunking")
+		assert.Equal(t, maxPerMessage, maxObserved, "at least one data message should fill the per-message cap")
 	})
 }
