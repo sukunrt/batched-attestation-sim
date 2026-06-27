@@ -13,9 +13,10 @@ import (
 // bitmap_stream.go implements the bitmap advertisement stream (§D): full
 // available state per active bucket is queued internally, triggered by the
 // periodic floor tick (re-emit only if changed), then each bitmap writer emits
-// per-peer available_ids deltas to bitmap-mesh peers and bypasses the send
-// budget. When EnablePushMeshBitmap is set, push-mesh peers also receive
-// per-peer deltas on every push tick.
+// per-peer deltas to bitmap-mesh peers, using available_ids or available
+// depending on estimated size, and bypasses the send budget. When
+// EnablePushMeshBitmap is set, push-mesh peers also receive per-peer deltas on
+// every push tick.
 
 // buildAvailableEnvelope assembles an internal full-availability
 // pb.ControlEnvelope (one CommitteeAttestationPartsMetadata per bucket,
@@ -145,8 +146,8 @@ func (m *Manager) emitPushMeshBitmaps() {
 // each bucket's emitted bitmap as lastEmitted. Buckets whose bitmap is unchanged
 // since lastEmitted are skipped. Returns nil when nothing would be sent.
 //
-// We MUST emit the AVAILABLE bitmap.
-// deduping into ids happens in the bitmap writer.
+// We MUST emit the AVAILABLE bitmap internally. Deduping into ids, or keeping
+// the bitmap when cheaper, happens in the bitmap writer.
 func (m *Manager) changedAvailableEnvelope(ss *slotState, slot int) *pb.ControlEnvelope {
 	ctrl := &pb.ControlEnvelope{}
 	for _, bk := range bucketKeys(ss) {

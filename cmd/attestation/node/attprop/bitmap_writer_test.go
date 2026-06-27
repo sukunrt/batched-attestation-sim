@@ -140,10 +140,25 @@ func TestBitmapWriterHashOnlyFirstSendKeepsHash(t *testing.T) {
 	require.Equal(t, []uint32{0}, env.Metadatas[0].AvailableIds)
 }
 
+func TestBitmapWriterUsesBitmapWhenCheaperThanAvailableIDs(t *testing.T) {
+	w := testBitmapWriter()
+	full := newCommitteeBitmap(w.committeeSize)
+	for pos := range 40 {
+		full.Set(pos)
+	}
+
+	w.enqueueBitmaps([]*pb.CommitteeAttestationPartsMetadata{testBitmapMetadata(1, "data", []byte(full))})
+	<-w.work
+	env := w.getNextBitmap()
+	require.Len(t, env.Metadatas, 1)
+	require.Empty(t, env.Metadatas[0].AvailableIds)
+	require.Equal(t, []byte(full), env.Metadatas[0].Available)
+}
+
 func testBitmapWriter() *bitmapWriter {
 	return &bitmapWriter{
 		work:          make(chan struct{}, 1),
-		committeeSize: 8,
+		committeeSize: 512,
 		pending:       make(map[bitmapKey][]*pb.CommitteeAttestationPartsMetadata),
 		sentFull:      make(map[string]struct{}),
 		sentAvailable: make(map[bitmapKey]bitmap.Bitmap),

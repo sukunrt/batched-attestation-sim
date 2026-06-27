@@ -138,7 +138,7 @@ Partial data and metadata identify each attestation-data bucket by `sha256(attes
 For each peer, the full `attestation_data` is sent once per partial payload kind; later messages
 for the same bucket carry only the hash. Metadata advertises committee-position deltas with
 `available_ids` and `requests_ids`; legacy bitmap fields are still decoded for compatibility, but
-new outgoing metadata does not populate them.
+the gossipsub partial-message modes do not populate them on new outgoing metadata.
 
 Classic GossipSub IHAVE/IWANT gossip remains enabled by default, including in partial-message
 mode:
@@ -192,8 +192,9 @@ peers receive all missing attestations regardless of holder count; bitmap peers 
 items with holder count below `pushPeers + bitmapPeers/2`.
 
 Push and bitmap streams send the full `attestation_data` once per peer stream for each bucket, then
-refer to it by `sha256(attestation_data)`. Bitmap-stream advertisements use per-peer
-`available_ids` deltas.
+refer to it by `sha256(attestation_data)`. Bitmap-stream advertisements use per-peer deltas:
+`available_ids` when cheaper, or the `available` bitmap when the writer's cost model estimates the
+bitmap is smaller (assuming two bytes per ID).
 Enable it with:
 
 ```yaml

@@ -117,7 +117,8 @@ The partial-message path implements the spec at
   signatures[] }`.
 - `CommitteeAttestationPartsMetadata { slot, attestation_data | attestation_data_hash,
   available_ids[], requests_ids[] }`. Legacy `available` / `requests` bitmap fields remain
-  decode-compatible only; new sends leave them empty.
+  decode-compatible for gossipsub partial modes; att_propagation bitmap streams may emit
+  `available` when the bitmap is cheaper than `available_ids`.
 - `ControlEnvelope` wraps `repeated CommitteeAttestationPartsMetadata` per peer per tick.
 - `BatchedAttestationEnvelope` wraps `repeated BatchedAttestation` per peer per tick.
 
@@ -253,8 +254,9 @@ count, while bitmap peers receive only entries with holder count below
 Buckets are keyed by `sha256(attestation_data)`. Push and bitmap streams each send full
 `attestation_data` once per peer stream for a bucket, then send only `attestation_data_hash`; each
 manager caches `sha256(attestation_data) => attestation_data` for validation and tracing. Bitmap
-streams queue the latest full available state internally, but each per-peer writer emits only
-`available_ids` deltas and leaves legacy bitmap fields empty.
+streams queue the latest full available state internally, and each per-peer writer emits the
+peer's delta as `available_ids` when cheaper or as the `available` bitmap when cheaper (cost model:
+two bytes per ID).
 When `enable_push_mesh_bitmap: true`, every attprop push tick also queues the node's current
 available bitmap to push-mesh peers on their bitmap streams. This is separate from the bitmap floor
 tick for bitmap-mesh peers and does not consume that floor-tick emission state.

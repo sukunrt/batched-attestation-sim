@@ -30,12 +30,12 @@ message BatchedAttestation {
 // CommitteeAttestationPartsMetadata is the per-AttestationData gossip control
 // envelope. `available_ids` advertises the committee positions the sender holds;
 // `requests_ids` is a non-persistent IWANT — the receiver satisfies what it can
-// on its next publish tick and forgets the rest. The legacy `available` and
-// `requests` bitmap fields are decode-only compatibility fields.
+// on its next publish tick and forgets the rest. The `available` bitmap field is
+// also used by att_propagation bitmap streams when it is cheaper than ids.
 message CommitteeAttestationPartsMetadata {
   int32 slot = 1; // redundant with attestation_data per spec
   bytes attestation_data = 2;
-  bytes available = 3; // legacy bitmap[committee_size], decode-only
+  bytes available = 3; // bitmap[committee_size], used when cheaper than available_ids
   bytes requests = 4; // legacy bitmap[committee_size], decode-only
   bytes attestation_data_hash = 5; // sha256(attestation_data), used after the first full-data send
   repeated uint32 available_ids = 6; // committee positions; values < committee_size

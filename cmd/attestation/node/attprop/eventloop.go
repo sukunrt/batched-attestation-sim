@@ -502,8 +502,8 @@ func (m *Manager) peerRTT(p peer.ID) (time.Duration, bool) {
 
 // sendFullBitmapTo queues our full current available state (every active slot)
 // to one peer's bitmap writer, bypassing the budget. The writer emits only the
-// peer's missing available_ids. Used when a peer first enters our bitmap mesh
-// (§D1).
+// peer's missing availability, using ids or bitmap form based on estimated
+// size. Used when a peer first enters our bitmap mesh (§D1).
 func (m *Manager) sendFullBitmapTo(p peer.ID) {
 	if m.cfg.DisableBitmapSends {
 		return
@@ -819,9 +819,11 @@ func (m *Manager) onInboundData(from peer.ID, env *pb.BatchedAttestationEnvelope
 
 		newEntries := b.addReceived(positions, batch.Signatures)
 		newDataRecvBytes := dataBytesForNewEntries(batch, newEntries)
+		role := m.mesh.roles[from]
 
 		m.logger.Info("partial_recv_batch",
 			"from", shortPeer(from),
+			"role", role,
 			"slot", slot,
 			"topic", m.cfg.TopicIndex,
 			"att_digest", digestHex(data, hash),

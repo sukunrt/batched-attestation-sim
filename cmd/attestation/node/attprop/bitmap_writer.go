@@ -17,6 +17,11 @@ type bitmapKey struct {
 	hash string
 }
 
+// estimatedAvailableIDBytes is the cost model for choosing available_ids over
+// the bitmap form. It intentionally keeps the decision simple instead of doing
+// a full protobuf size calculation.
+const estimatedAvailableIDBytes = 2
+
 // bitmapWriter owns one peer's outgoing bitmap stream. It keeps at most one
 // queue per (slot, attestation_data), coalescing each queue into one metadata
 // item per write wakeup.
@@ -131,8 +136,8 @@ func (w *bitmapWriter) getNextBitmap() *pb.ControlEnvelope {
 		if w.sentAvailable[key] == nil {
 			w.sentAvailable[key] = newCommitteeBitmap(w.committeeSize)
 		}
-		ids := w.newAvailableIDs(w.sentAvailable[key], last.Available, queued)
-		if len(ids) == 0 {
+		ids, bm := w.getNewIDsOrBitmap(w.sentAvailable[key], last.Available, queued)
+		if len(ids) == 0 && bm == nil {
 			continue
 		}
 
@@ -141,6 +146,10 @@ func (w *bitmapWriter) getNextBitmap() *pb.ControlEnvelope {
 			AttestationData:     last.AttestationData,
 			AttestationDataHash: []byte(key.hash),
 			AvailableIds:        ids,
+		}
+		if len(ids) == 0 && len(bm) > 0 {
+			out.AvailableIds = nil
+			out.Available = bm.Clone()
 		}
 		if _, sent := w.sentFull[key.hash]; sent {
 			out.AttestationData = nil
@@ -159,11 +168,11 @@ func (w *bitmapWriter) getNextBitmap() *pb.ControlEnvelope {
 	}
 }
 
-func (w *bitmapWriter) newAvailableIDs(
+func (w *bitmapWriter) getNewIDsOrBitmap(
 	lastSent bitmap.Bitmap,
 	current bitmap.Bitmap,
 	queued []*pb.CommitteeAttestationPartsMetadata,
-) []uint32 {
+) ([]uint32, bitmap.Bitmap) {
 	full := newCommitteeBitmap(w.committeeSize)
 	for pos := range w.committeeSize {
 		if current.Get(pos) {
@@ -186,7 +195,10 @@ func (w *bitmapWriter) newAvailableIDs(
 		ids = append(ids, uint32(pos))
 		lastSent.Set(pos)
 	}
-	return ids
+	if len(ids)*estimatedAvailableIDBytes > len(lastSent) {
+		return nil, lastSent
+	}
+	return ids, nil
 }
 
 func (w *bitmapWriter) closeAndReset() {
